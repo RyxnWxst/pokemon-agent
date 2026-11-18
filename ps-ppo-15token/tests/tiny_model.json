@@ -1,0 +1,10 @@
+{
+  "emb_dims": {"pokemon": 8, "item": 8, "ability": 8, "move": 8, "action": 12},
+  "out_dims": {"move_vec": 16, "ability_vec": 16, "pokemon_vec": 64, "global_vec": 16, "transition_vec": 16},
+  "bank_dims": {"val_100": 8, "stat": 8, "power": 8},
+  "bank_ranges": {"val_100": 101, "stat": 800, "power": 251},
+  "dropout": 0.0,
+  "n_layers": 2,
+  "n_heads": 4,
+  "ff_expansion": 2.0
+}

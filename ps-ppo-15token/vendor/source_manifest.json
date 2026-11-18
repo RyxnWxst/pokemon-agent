@@ -1,0 +1,15 @@
+{
+  "revision": "de8cc69ef14fae2175b00f7296ef92844c3cacff",
+  "repository": "https://github.com/Nebraskinator/ps-ppo",
+  "copies_unmodified": true,
+  "sources": {
+    "ppo_core.py": {
+      "copy": "historical_core.py",
+      "sha256": "e47ee2981878f9dccd0be8d9af6836237bc603dce82d7bd711e6574c4d674523"
+    },
+    "config.py": {
+      "copy": "historical_config.py",
+      "sha256": "f78138f7d415152db7a6618882ad8cbc6192a4dfce80ba7cdcff3340f379a582"
+    }
+  }
+}

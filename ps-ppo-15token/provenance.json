@@ -1,0 +1,40 @@
+{
+  "project": "ps-ppo-15token",
+  "architecture": "readme_15token",
+  "tokens": 15,
+  "recurrent": false,
+  "architecture_source_revision": "de8cc69ef14fae2175b00f7296ef92844c3cacff",
+  "parent_repository_head": "029c640bdf0cd099a002336dfc4ba552a825e9b5",
+  "source_note": "Parent working copy includes local observation/teacher/runtime fixes; its HEAD alone does not describe these copied sources.",
+  "source_working_copy_sha256": {
+    "obs_assembler.py": "f4ff342a07f6c276a11ba8f08018cbc4076f32db7c88eafa9587447ab074caf9",
+    "obs_abilities.py": "d0d107b05aaaafc4b1283523df08d9265e652458da4811814d97ef1f60bc2a37",
+    "obs_global.py": "7248fbef9bd1c0425febcd6bb7e6d5b05bcac5468615903c7959d5ee44316f79",
+    "obs_moves.py": "18c6369f224191354eba91fa1746f2cdd88b6f29e674cfcde50bbf4b089b9a1c",
+    "obs_pokemon.py": "6ceae6ddd65607431dfc834ef32989401bc6ff3a850335312ddd0fdda98f1647",
+    "obs_transitions.py": "aa8c0c5c5f43ef31f96668f15be723267cec775b081ba8d20ca2c161251d67a7",
+    "poke_env_compat.py": "f7f71026189befc0e80db1b86adc0c297efc3bf35bd7f5caa27fc4d35323ce4f",
+    "utils.py": "4b57cf890d664de408e23c80971f56c26cdaa4f30e7fb178a39ca0a56d89553d",
+    "vocab.json": "42b488c46a0845db23eadc53642094056d7660c0b4e76cb7e13ee4d107d2e973",
+    "type_schema.json": "b8ce1f38804bb6d4293882c5015eb93e2ce73035fe5d65dddabd3315b7472473",
+    "worker.py": "3a2a76223fce3fba9d686f404d1969cfb58f6b07f48f1280ce91e80e1ed9b680",
+    "learner.py": "da4ba2fd346e32a71c33904bcb77ecbdf888c92b62e0c288cd6d760daecbfac0",
+    "training_reports.py": "02cfdab316942ddd1ceb869580304d9ca9eceb82fcce1ac30c7e1febd04d9f8a"
+  },
+  "tested_showdown_revision": "7e743761cd13cdb361fc0f58eb5a866284894f5b",
+  "independent_python_sources": true,
+  "external_dependencies": [
+    "Python environment",
+    "Node.js",
+    "built Pokemon Showdown with bundled rlspawn plugin"
+  ],
+  "adaptations": [
+    "Current corrected observation schema and turn scaling",
+    "FP32 stateless inference and learner",
+    "Frozen imitation critic and critic-only warmup",
+    "Temperature 1 PPO sampling",
+    "Minibatch remainders trained on: under half a minibatch merged into the last minibatch (README-era code dropped them)",
+    "Explicit state target with resumable counters",
+    "Restored README-era move-category one-hot inputs (ModelConfig.move_category_inputs; legacy checkpoints load unchanged)"
+  ]
+}

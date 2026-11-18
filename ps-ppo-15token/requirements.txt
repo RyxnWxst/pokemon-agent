@@ -1,0 +1,5 @@
+# Install CUDA PyTorch separately; see README.md.
+torch==2.7.1
+ray==2.48.0
+poke-env==0.15.0
+numpy==2.2.6
