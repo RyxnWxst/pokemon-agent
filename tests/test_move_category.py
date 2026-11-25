@@ -1,24 +1,22 @@
 """README-era move-category inputs: restoration, legacy loading, and output-preserving upgrade."""
 from dataclasses import asdict, replace
-import json
 import unittest
 import torch
 
-from checkpoint_io import model_config
-from config import ROOT, ModelConfig
-from model import make_model, upgrade_move_category_inputs
-from obs_assembler import ObservationAssembler
-from vendor.historical_config import ModelConfig as HistoricalModelConfig
-
-FIXTURES = ROOT/"tests/fixtures"
+from helpers import load_fixture, tiny_architecture
+from pokemon_agent.config import ModelConfig
+from pokemon_agent.model.serialization import model_config
+from pokemon_agent.model.transformer import make_model, upgrade_move_category_inputs
+from pokemon_agent.obs.assembler import ObservationAssembler
+from pokemon_agent.vendor.historical_config import ModelConfig as HistoricalModelConfig
 
 
 class MoveCategoryTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         torch.set_num_threads(2)
-        cls.obs = torch.load(FIXTURES/"battle-observations.pt", weights_only=True)["observations"].float()
-        cls.architecture = ModelConfig(**json.loads((ROOT/"tests/tiny_model.json").read_text()))
+        cls.obs = load_fixture()["observations"].float()
+        cls.architecture = tiny_architecture()
         cls.legacy_architecture = replace(cls.architecture, move_category_inputs=False)
         meta = ObservationAssembler().meta
         start, end = meta["offsets"]["move_scalars"]

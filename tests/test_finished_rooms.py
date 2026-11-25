@@ -9,8 +9,10 @@ from poke_env.battle import Battle
 from poke_env.concurrency import POKE_LOOP
 from poke_env.player import SimpleHeuristicsPlayer
 
-from config import RunConfig
-from worker import FINISHED_ROOM_TTL_S, SyncBridgePlayer, TrainingHeuristicPlayer
+from pokemon_agent.config import RunConfig
+from pokemon_agent.env.bridge import SyncBridgePlayer
+from pokemon_agent.env.heuristics import TrainingHeuristicPlayer
+from pokemon_agent.env.rooms import FINISHED_ROOM_TTL_S
 
 TAG = "battle-gen9randombattle-101"
 DEINIT = [[f">{TAG}"], ["", "deinit"]]
