@@ -2,23 +2,15 @@
 
 The upgraded weights reproduce the source policy and value outputs; the restored
 Physical/Special/Status inputs start with zero weight and are learned by further
-imitation (imitation.py --init-checkpoint). The source file is never modified.
+imitation (pokemon-agent-imitate --init-checkpoint). The source file is never modified.
 """
 import argparse
-import hashlib
 from pathlib import Path
 import torch
-from checkpoint_io import atomic_json, load_weights, model_config, read_checkpoint, replace_file
-from config import ROOT
-from model import make_model, upgrade_move_category_inputs
-
-
-def sha256(path):
-    digest = hashlib.sha256()
-    with open(path, "rb") as stream:
-        for block in iter(lambda: stream.read(1 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
+from pokemon_agent.files import atomic_json, atomic_torch_save, sha256_file
+from pokemon_agent.model.serialization import load_model, read_checkpoint
+from pokemon_agent.model.transformer import upgrade_move_category_inputs
+from pokemon_agent.paths import project_root
 
 
 def load_observations(path, limit):
@@ -43,22 +35,21 @@ def outputs(model, observations, batch_size=256):
     return [torch.cat(items) for items in zip(*parts)]
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+def main(argv=None):
+    parser = argparse.ArgumentParser(prog="pokemon-agent-upgrade", description=__doc__)
     parser.add_argument("source")
     parser.add_argument("--output", required=True)
-    parser.add_argument("--observations", default=str(ROOT/"tests/fixtures/battle-observations.pt"),
+    parser.add_argument("--observations", default=str(project_root()/"tests/fixtures/battle-observations.pt"),
         help="Real observations for the equality check: fixture file or imitation episode list")
     parser.add_argument("--max-decisions", type=int, default=5000)
     parser.add_argument("--tolerance", type=float, default=1e-6)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     source, output = Path(args.source).resolve(), Path(args.output).resolve()
     if output.exists() or output.with_suffix(".json").exists():
         parser.error("Output already exists; choose a new path")
     torch.set_num_threads(2)
     checkpoint = read_checkpoint(source)
-    legacy = make_model(model_config(checkpoint)).eval()
-    load_weights(legacy, checkpoint)
+    legacy = load_model(checkpoint)
     if legacy.move_category_inputs:
         parser.error("Source checkpoint already uses move-category inputs")
     upgraded = upgrade_move_category_inputs(legacy).eval()
@@ -79,7 +70,7 @@ def main():
         == after[0].masked_fill(~mask, -1e9).argmax(1)).float().mean())
 
     report = dict(status="complete", kind="move_category_inputs", source=str(source),
-        source_sha256=sha256(source), output=str(output),
+        source_sha256=sha256_file(source), output=str(output),
         zeroed_move_net_input_columns=upgraded.category_weight_columns(),
         verification=dict(observations=str(Path(args.observations).resolve()), decisions=len(observations),
             category_inputs_present=category_inputs, max_abs_difference=differences,
@@ -87,11 +78,8 @@ def main():
     payload = dict(project="ps-ppo-15token-upgrade", architecture="readme_15token", format_version=1,
         phase=checkpoint.get("phase", "imitation"), model=upgraded.state_dict(),
         model_config=upgraded.reproduction_config, upgrade=report)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    temporary = output.with_suffix(output.suffix + ".tmp")
-    torch.save(payload, temporary)
-    replace_file(temporary, output)
-    report["output_sha256"] = sha256(output)
+    atomic_torch_save(payload, output)
+    report["output_sha256"] = sha256_file(output)
     atomic_json(output.with_suffix(".json"), report)
     print(report)
 

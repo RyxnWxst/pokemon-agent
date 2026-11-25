@@ -1,10 +1,15 @@
 """Configuration for the standalone, stateless 15-token project."""
 from dataclasses import asdict, dataclass, field
-from pathlib import Path
-import torch
-from vendor.historical_config import ModelConfig as HistoricalModelConfig
 
-ROOT = Path(__file__).resolve().parent
+from pokemon_agent.paths import checkpoints_dir
+from pokemon_agent.vendor.historical_config import ModelConfig as HistoricalModelConfig
+
+
+def default_device() -> str:
+    """CUDA when PyTorch can see a GPU, otherwise the CPU."""
+    import torch
+
+    return "cuda" if torch.cuda.is_available() else "cpu"
 
 
 @dataclass(frozen=True)
@@ -55,12 +60,12 @@ class RolloutConfig:
 
 @dataclass(frozen=True)
 class InferenceConfig:
-    device: str = "cuda" if torch.cuda.is_available() else "cpu"
+    device: str = field(default_factory=default_device)
 
 
 @dataclass(frozen=True)
 class LearnerConfig:
-    device: str = "cuda" if torch.cuda.is_available() else "cpu"
+    device: str = field(default_factory=default_device)
     mode: str = "ppo"
     gamma: float = .9999
     gae_lambda: float = .75
@@ -95,7 +100,7 @@ class LearnerConfig:
     max_grad_norm: float = .5
     target_kl: float = .02
     steps_per_update: int = 32768
-    ckpt_dir: str = str(ROOT / "checkpoints/ppo")
+    ckpt_dir: str = field(default_factory=lambda: str(checkpoints_dir() / "ppo"))
     save_every_updates: int = 25
     keep_last: int = 3
     # Policy-only copies kept permanently under <ckpt_dir>/milestones; 0 disables.
@@ -104,9 +109,6 @@ class LearnerConfig:
     resume_path: str | None = None
     max_updates: int = 0
     max_total_steps: int = 0
-    # Retained for worker/report compatibility; replay is disabled in this project.
-    teacher_probability: float = .5
-    replay_steps: int = 0
 
     def __post_init__(self):
         if self.mode not in ("imitation", "warmup", "ppo", "ppo_vs_teacher"):
@@ -125,9 +127,6 @@ class LearnerConfig:
             raise ValueError("PPO learning-rate multipliers must be historical or current")
         if self.temp_start != 1 or self.temp_end != 1:
             raise ValueError("Use temperature 1 so PPO behavior and update log probabilities agree")
-
-    def get_temp(self, total_steps):
-        return 1.
 
     def ppo_kwargs(self):
         names = ("update_epochs", "minibatch_size", "clip_coef", "ent_coef", "vf_coef",
@@ -157,10 +156,6 @@ class RunConfig:
     @classmethod
     def default(cls):
         return cls()
-
-    def make_model(self):
-        from model import make_model
-        return make_model(self.model)
 
     def as_dict(self):
         return asdict(self)

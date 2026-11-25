@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional, Final
 
-from utils import get_id
+from pokemon_agent.obs.vocab import get_id
 
 # Configure logger
 logger = logging.getLogger(__name__)

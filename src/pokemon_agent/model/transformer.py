@@ -6,10 +6,10 @@ adapts input layout and the current runner interface only; it preserves the
 """
 from dataclasses import asdict
 import torch
-from obs_assembler import ObservationAssembler
-from ppo_core import ObservationUnpacker
-from vendor.historical_core import PokeTransformer
-from config import ModelConfig
+from pokemon_agent.config import ModelConfig
+from pokemon_agent.model.unpacker import ObservationUnpacker
+from pokemon_agent.obs.layout import observation_metadata
+from pokemon_agent.vendor.historical_core import PokeTransformer
 
 # README-era move scalars stored the Physical/Special/Status one-hot at indices
 # 3-5, ahead of the priority one-hot at 6-18. The current schema leaves 3-5 empty
@@ -36,7 +36,7 @@ def category_columns(metadata):
 
 class ReadmePokeTransformer(PokeTransformer):
     def __init__(self, metadata=None, model_config=None):
-        metadata = metadata or ObservationAssembler().meta
+        metadata = metadata or observation_metadata()
         model_config = model_config or ModelConfig()
         self.reproduction_config = asdict(model_config)
         super().__init__(act_dim=14, meta=metadata, emb_dims=model_config.emb_dims,

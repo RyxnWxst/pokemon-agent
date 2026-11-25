@@ -3,23 +3,9 @@ import numpy as np
 import ray
 import torch
 import time
-from ppo_core import masked_sample
-
-
-@ray.remote
-class WeightStore:
-    def __init__(self):
-        self.weights = None
-        self.version = -1
-
-    def update(self, weights, version):
-        self.weights, self.version = weights, version
-
-    def get_version(self):
-        return self.version
-
-    def get_weights(self):
-        return self.weights
+from pokemon_agent.model.transformer import make_model
+from pokemon_agent.rl.distributions import masked_sample
+from pokemon_agent.rl.value import value_variance
 
 
 class InferenceActor:
@@ -27,7 +13,7 @@ class InferenceActor:
         torch.set_num_threads(2)
         torch.set_float32_matmul_precision(cfg.matmul_precision)
         self.cfg, self.weight_store = cfg, weight_store
-        self.net = cfg.make_model().to(cfg.infer.device).eval()
+        self.net = make_model(cfg.model).to(cfg.infer.device).eval()
         self.net.requires_grad_(False)
         self.current_version = -1
         self.requests = self.flushes = 0
@@ -35,11 +21,8 @@ class InferenceActor:
         self.started_cpu = time.process_time()
         self.sync_seconds = self.inference_seconds = 0.
 
-    @torch.no_grad()
-    def infer_batch(self, tags, observations):
-        if len(tags) != len(observations):
-            raise ValueError("Battle tags and observations must have the same length")
-        started = time.perf_counter()
+    def _sync_weights(self):
+        """Load the newest published weights if the store's version has moved on."""
         version = ray.get(self.weight_store.get_version.remote())
         if version != self.current_version:
             weights = ray.get(self.weight_store.get_weights.remote())
@@ -47,12 +30,18 @@ class InferenceActor:
                 raise RuntimeError("Learner has not published initial weights")
             self.net.load_state_dict(weights, strict=True)
             self.current_version = version
+
+    @torch.no_grad()
+    def infer_batch(self, tags, observations):
+        if len(tags) != len(observations):
+            raise ValueError("Battle tags and observations must have the same length")
+        started = time.perf_counter()
+        self._sync_weights()
         self.sync_seconds += time.perf_counter()-started
         started = time.perf_counter()
         obs = torch.tensor(np.asarray(observations), device=self.cfg.infer.device)
         logits, value_logits, values, *_ = self.net(obs)
-        probabilities = torch.softmax(value_logits, dim=-1)
-        variance = (probabilities*(self.net.v_support-values[:, None]).square()).sum(-1)
+        variance = value_variance(value_logits, values, self.net.v_support)
         start, end = self.net.unpacker.offsets["action_mask"]
         actions, logp, _ = masked_sample(logits, obs[:, start:end], temp=1.)
         self.requests += len(obs)

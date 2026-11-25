@@ -1,5 +1,6 @@
-# obs_global.py
-from utils import get_id, two_hot_encode_inplace
+"""Global battle state: turn, Tera usage, weather, terrain and side conditions (41 numbers)."""
+from pokemon_agent.obs.encoding import two_hot_encode_inplace
+from pokemon_agent.obs.vocab import get_id
 
 def encode_global_inplace(battle, buffer, offset_tuple, vocab_map, vocab_lists):
     start, _ = offset_tuple

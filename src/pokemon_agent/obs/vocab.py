@@ -1,16 +1,19 @@
 """
-Utility functions for Pokémon Showdown RL Environment.
+Vocabularies for Pokémon Showdown observations.
 
-Provides high-performance string normalization, categorical ID lookups with 
-unknown entity tracking, and in-place numerical transformations like 
-two-hot encoding.
+Loads vocab.json, builds the name-to-ID tables, and provides high-performance
+string normalization and categorical ID lookups with unknown-entity tracking.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 from collections import Counter
-from typing import Any, Dict, Optional, Counter as CounterType
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Counter as CounterType
+
+from pokemon_agent.paths import VOCAB_PATH
 
 # Configure logger
 logger = logging.getLogger(__name__)
@@ -106,46 +109,18 @@ def get_id(vocab_map: Dict[str, Dict[str, int]], path: str, value: Any) -> int:
     return val_id + 1
 
 
-def two_hot_encode_inplace(
-    value: float, 
-    n_bins: int, 
-    buffer: Any, 
-    start_idx: int, 
-    v_min: float = 0.0, 
-    v_max: float = 1.0
-) -> None:
-    """
-    Applies two-hot encoding to represent a continuous value across discrete bins.
-    
-    Instead of assigning a continuous scalar to a single bucket (which loses 
-    gradient information), this splits the weight (1.0) proportionally across 
-    the two closest adjacent bins. 
+def load_vocab(path: Optional[str | Path] = None) -> Dict[str, List[str]]:
+    """Loads the vocabulary lists (category -> names); defaults to the bundled vocab.json."""
+    path = Path(path) if path is not None else VOCAB_PATH
+    if not path.exists():
+        raise FileNotFoundError(f"Vocabulary file not found at {path}")
+    with path.open("r", encoding="utf-8") as f:
+        return json.load(f)
 
-    Args:
-        value: The continuous scalar to encode.
-        n_bins: The total number of discrete bins available.
-        buffer: The shared NumPy array being written to.
-        start_idx: The starting index for this feature block in the buffer.
-        v_min: The minimum expected value (clamping boundary).
-        v_max: The maximum expected value (clamping boundary).
-    """
-    # 1. Clamp value to the expected range
-    val = max(v_min, min(v_max, float(value)))
-    
-    # 2. Scale the value to the bin index space [0, n_bins - 1]
-    scaled = (val - v_min) / (v_max - v_min) * (n_bins - 1)
-    
-    # 3. Calculate the lower bin index and the fractional remainder
-    idx = int(scaled)
-    frac = scaled - float(idx)
-    
-    
-    
-    # 4. Write weights in-place
-    if idx < n_bins - 1:
-        # Distribute 1.0 across the lower and upper bin based on proximity
-        buffer[start_idx + idx] = 1.0 - frac
-        buffer[start_idx + idx + 1] = frac
-    else:
-        # Edge case: exactly at or exceeding the maximum boundary
-        buffer[start_idx + n_bins - 1] = 1.0
+
+def build_vocab_map(vocab_lists: Dict[str, List[str]]) -> Dict[str, Dict[str, int]]:
+    """Builds the name -> 0-based index tables that get_id reads."""
+    return {
+        category: {item.lower(): i for i, item in enumerate(items)}
+        for category, items in vocab_lists.items()
+    }

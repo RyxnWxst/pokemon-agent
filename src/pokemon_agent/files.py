@@ -1,15 +1,9 @@
-"""Strict checkpoint loading and Windows-safe atomic writes."""
-from dataclasses import asdict
+"""Windows-safe atomic writes and file hashing."""
+import hashlib
 import json
 import os
 from pathlib import Path
 import time
-import torch
-from config import ModelConfig
-
-# Settings that postdate older checkpoints, with the behavior those checkpoints
-# were trained under. Legacy models never received move-category inputs.
-LEGACY_MODEL_DEFAULTS = {"move_category_inputs": False}
 
 
 def replace_file(temporary, destination):
@@ -34,21 +28,24 @@ def atomic_json(path, payload):
     replace_file(temporary, path)
 
 
-def read_checkpoint(path):
-    checkpoint = torch.load(path, map_location="cpu", weights_only=False)
-    if checkpoint.get("architecture") != "readme_15token":
-        raise ValueError("Expected an explicitly identified readme_15token checkpoint")
-    return checkpoint
+def atomic_torch_save(payload, path):
+    """torch.save to a temporary file, flush it to disk, then rename it into place."""
+    import torch
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    with temporary.open("wb") as stream:
+        torch.save(payload, stream)
+        stream.flush()
+        os.fsync(stream.fileno())
+    replace_file(temporary, path)
+    return path
 
 
-def model_config(checkpoint):
-    config = checkpoint.get("model_config") or checkpoint.get("run_cfg", {}).get("model")
-    if config is None:
-        raise ValueError("Checkpoint is missing its model configuration")
-    return ModelConfig(**{**LEGACY_MODEL_DEFAULTS, **config})
-
-
-def load_weights(model, checkpoint):
-    if asdict(model_config(checkpoint)) != model.reproduction_config:
-        raise ValueError("Checkpoint architecture/configuration differs from the requested model")
-    model.load_state_dict(checkpoint["model"], strict=True)
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as stream:
+        for block in iter(lambda: stream.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()

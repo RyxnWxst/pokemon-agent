@@ -12,7 +12,7 @@ import logging
 from typing import Any, Dict, Optional, Final
 
 import numpy as np
-from utils import get_id
+from pokemon_agent.obs.vocab import get_id
 
 # Configure logger
 logger = logging.getLogger(__name__)

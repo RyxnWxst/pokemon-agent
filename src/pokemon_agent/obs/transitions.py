@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Final, Optional, Tuple
 
-from utils import get_id
+from pokemon_agent.obs.vocab import get_id
 
 logger = logging.getLogger(__name__)
 

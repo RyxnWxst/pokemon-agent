@@ -1,16 +1,8 @@
-"""Action-agreement metrics over every decision, including partial batches."""
+"""Action-agreement metrics over every decision, and the Wilson interval for win rates."""
+import math
 import torch
 import torch.nn.functional as F
-from ppo_core import AsyncEpisodeDataset, masked_logits
-
-
-def make_dataset(episodes):
-    dataset = AsyncEpisodeDataset(14, "cpu")
-    for index, (obs, actions, returns) in enumerate(episodes):
-        zeros = torch.zeros(len(actions))
-        dataset.add_steps(obs, actions, zeros, zeros, zeros, returns, zeros,
-            torch.full((len(actions),), index, dtype=torch.long))
-    return dataset
+from pokemon_agent.rl.distributions import masked_logits
 
 
 @torch.no_grad()
@@ -48,3 +40,13 @@ def combine_metrics(metrics):
         groups[name] = dict(correct=c, decisions=n, accuracy=c/n if n else None)
     return dict(correct=correct, decisions=count, accuracy=correct/count,
         nll=sum(item["nll"]*item["decisions"] for item in metrics)/count, action_groups=groups)
+
+
+def wilson(wins, count):
+    """95% Wilson score interval for a win rate of wins/count."""
+    z = 1.959963984540054
+    p = wins/count
+    denominator = 1+z*z/count
+    center = (p+z*z/(2*count))/denominator
+    radius = z*math.sqrt(p*(1-p)/count+z*z/(4*count*count))/denominator
+    return [center-radius, center+radius]

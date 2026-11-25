@@ -1,6 +1,24 @@
 """Mode-specific FP32 AdamW; imitation freezes the critic, warmup trains it."""
 import torch
-from config import PPO_LR_MULTIPLIERS
+from pokemon_agent.config import PPO_LR_MULTIPLIERS
+
+
+def zone_is_trainable(zone, mode):
+    """Warmup trains only the critic (zone v); imitation trains everything but it; PPO trains all."""
+    return zone == "v" if mode == "warmup" else not (mode == "imitation" and zone == "v")
+
+
+def learning_rate_scale(step, cfg):
+    """Multiplier on the base learning rate at an optimizer step: warm up, hold, then decay."""
+    if cfg.lr_schedule == "constant":
+        return 1.
+    if step < cfg.lr_warmup_steps:
+        return (step+1)/max(1, cfg.lr_warmup_steps)
+    if step < cfg.lr_warmup_steps + cfg.lr_hold_steps:
+        return 1.
+    progress = min(1., (step-cfg.lr_warmup_steps-cfg.lr_hold_steps)
+        / max(1, cfg.lr_total_steps-cfg.lr_warmup_steps-cfg.lr_hold_steps))
+    return 1./(8*progress+1)**1.5
 
 
 def make_optimizer(model, cfg):
@@ -8,7 +26,7 @@ def make_optimizer(model, cfg):
     groups = []
     ppo_multipliers = PPO_LR_MULTIPLIERS[cfg.ppo_lr_multipliers]
     for zone, parameters in zones.items():
-        active = zone == "v" if cfg.mode == "warmup" else not (cfg.mode == "imitation" and zone == "v")
+        active = zone_is_trainable(zone, cfg.mode)
         multiplier = 1.
         if cfg.mode.startswith("ppo"):
             multiplier = ppo_multipliers[zone if zone in ("pi", "v") else "backbone"]
@@ -22,16 +40,4 @@ def make_optimizer(model, cfg):
             if items:
                 groups.append(dict(params=items, lr=cfg.lr*multiplier, weight_decay=weight_decay, name=zone))
     optimizer = torch.optim.AdamW(groups, eps=1e-5)
-
-    def scale(step):
-        if cfg.lr_schedule == "constant":
-            return 1.
-        if step < cfg.lr_warmup_steps:
-            return (step+1)/max(1, cfg.lr_warmup_steps)
-        if step < cfg.lr_warmup_steps + cfg.lr_hold_steps:
-            return 1.
-        progress = min(1., (step-cfg.lr_warmup_steps-cfg.lr_hold_steps)
-            / max(1, cfg.lr_total_steps-cfg.lr_warmup_steps-cfg.lr_hold_steps))
-        return 1./(8*progress+1)**1.5
-
-    return optimizer, torch.optim.lr_scheduler.LambdaLR(optimizer, scale)
+    return optimizer, torch.optim.lr_scheduler.LambdaLR(optimizer, lambda step: learning_rate_scale(step, cfg))

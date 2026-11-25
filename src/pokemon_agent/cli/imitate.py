@@ -1,33 +1,31 @@
 """Offline, bounded-memory imitation with validation and resumable chunk saves."""
 import argparse
-from dataclasses import asdict, replace
-import hashlib
 import json
+from dataclasses import asdict, replace
 from pathlib import Path
 import random
 import torch
-from checkpoint_io import atomic_json, load_weights, model_config, read_checkpoint, replace_file
-from config import ROOT, LearnerConfig, ModelConfig
-from metrics import action_metrics, combine_metrics, make_dataset
-from model import make_model
-from optimizers import make_optimizer
-from ppo_core import ppo_update
+from pokemon_agent.config import LearnerConfig
+from pokemon_agent.model.serialization import load_weights, read_checkpoint
+from pokemon_agent.model.transformer import make_model
+from pokemon_agent.files import atomic_json
+from pokemon_agent.paths import checkpoints_dir
+from pokemon_agent.rl.buffer import make_dataset
+from pokemon_agent.training.checkpoints import restore_imitation_checkpoint
+from pokemon_agent.training.datasets import (fingerprint, load_manifest, load_validation_episodes,
+    shard_path, split_entries)
+from pokemon_agent.training.imitation import (resolve_architecture, score_initial_weights,
+    score_training_shards, train_imitation)
+from pokemon_agent.training.optimizer import make_optimizer
 
 
-def fingerprint(episode):
-    digest = hashlib.sha256()
-    for tensor in episode[:2]:
-        digest.update(tensor.contiguous().numpy().tobytes())
-    return digest.digest()
-
-
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(prog="pokemon-agent-imitate", description=__doc__)
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--epochs", type=int, default=15)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
-    parser.add_argument("--output", default=str(ROOT/"checkpoints/imitation"))
+    parser.add_argument("--output", default=str(checkpoints_dir()/"imitation"))
     parser.add_argument("--model-config")
     parser.add_argument("--init-checkpoint",
         help="Start from these weights and architecture with a fresh optimizer (e.g. an upgraded checkpoint)")
@@ -36,36 +34,29 @@ def main():
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--validation-data", help="Legacy single-file validation source; shuffled with seed 71")
     parser.add_argument("--validation-start", type=int, default=800)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if min(args.epochs, args.batch_size) < 1 or args.learning_rate <= 0:
         parser.error("Epoch, batch sizes and learning rate must be positive")
     if args.init_checkpoint and args.model_config:
         parser.error("--init-checkpoint supplies the architecture; omit --model-config")
+    return parser, args
+
+
+def main(argv=None):
+    parser, args = parse_args(argv)
     torch.set_num_threads(2)
     torch.manual_seed(71)
     random.seed(71)
-    manifest_path = Path(args.manifest).resolve()
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+    manifest_path, manifest = load_manifest(args.manifest)
     if manifest.get("status", "complete") != "complete":
         parser.error("Collection must be complete before offline training")
     entries = manifest["shards"]
-
-    def path(entry):
-        value = Path(entry["path"])
-        return value if value.is_absolute() else manifest_path.parent/value
-
-    training = [entry for entry in entries if entry.get("split", "training") == "training"]
-    validation_episodes = []
-    for entry in entries:
-        if entry.get("split") == "validation":
-            validation_episodes.extend(torch.load(path(entry), map_location="cpu", weights_only=False))
-    if args.validation_data:
-        if validation_episodes:
-            parser.error("Choose manifest validation or --validation-data, not both")
-        base = torch.load(args.validation_data, map_location="cpu", weights_only=False)
-        random.Random(71).shuffle(base)
-        validation_episodes = base[args.validation_start:]
-        del base
+    training = [shard_path(manifest_path, entry) for entry in split_entries(entries, "training")]
+    try:
+        validation_episodes = load_validation_episodes(manifest_path, entries,
+            args.validation_data, args.validation_start)
+    except ValueError as exc:
+        parser.error(str(exc))
     if not training or not validation_episodes:
         parser.error("Nonempty, separate training and validation data are required")
     validation = make_dataset(validation_episodes)
@@ -79,8 +70,7 @@ def main():
     saved = read_checkpoint(last) if args.resume and last.exists() else None
     # A resumed run continues from last.pt; the initial weights are only used once.
     initial = read_checkpoint(args.init_checkpoint) if args.init_checkpoint and not saved else None
-    architecture = (model_config(saved) if saved else model_config(initial) if initial else
-        ModelConfig(**json.loads(Path(args.model_config).read_text())) if args.model_config else ModelConfig())
+    architecture = resolve_architecture(saved, initial, args.model_config)
     model = make_model(architecture).to(args.device)
     cfg = replace(LearnerConfig(), mode="imitation", device=args.device, minibatch_size=args.batch_size,
         update_epochs=1, lr=args.learning_rate, lr_schedule=args.lr_schedule)
@@ -90,14 +80,8 @@ def main():
         load_weights(model, initial)
         del initial
     if saved:
-        load_weights(model, saved)
-        optimizer.load_state_dict(saved["optimizer"])
-        scheduler.load_state_dict(saved["scheduler"])
-        torch.set_rng_state(saved["torch_rng"])
-        if args.device.startswith("cuda") and saved.get("cuda_rng") is not None:
-            torch.cuda.set_rng_state_all(saved["cuda_rng"])
-        start_epoch, next_shard = saved["epoch"], saved["next_shard"]
-        best, history = saved["best_accuracy"], saved["validation_history"]
+        start_epoch, next_shard, best, history = restore_imitation_checkpoint(
+            saved, model, optimizer, scheduler, args.device)
         del saved
     status_path = directory/"status.json"
     report = dict(status="training", manifest=str(manifest_path), epochs_requested=args.epochs,
@@ -106,62 +90,16 @@ def main():
         learning_rate=args.learning_rate, lr_schedule=args.lr_schedule, batch_size=args.batch_size)
     if history and history[0]["epoch"] == 0:
         report["initial_validation"] = history[0]["metrics"]
-
-    def save_checkpoint(destination, epoch, next_position, resume=False):
-        payload = dict(project="ps-ppo-15token-imitation", architecture="readme_15token", phase="imitation",
-            model=model.state_dict(), model_config=asdict(architecture), epoch=epoch, next_shard=next_position,
-            best_accuracy=best, validation_history=history)
-        if resume:
-            payload.update(optimizer=optimizer.state_dict(), scheduler=scheduler.state_dict(),
-                torch_rng=torch.get_rng_state(),
-                cuda_rng=torch.cuda.get_rng_state_all() if args.device.startswith("cuda") else None)
-        temporary = destination.with_suffix(".tmp")
-        torch.save(payload, temporary)
-        replace_file(temporary, destination)
-
+    common = dict(directory=directory, architecture=asdict(architecture), report=report, status_path=status_path)
     try:
         if args.init_checkpoint and not history:
-            # Score the starting weights so best.pt is never worse than the initialization.
-            metrics = action_metrics(model, validation)
-            history.append(dict(epoch=0, shard=0, metrics=metrics, loss=None))
-            best = metrics["accuracy"]
-            save_checkpoint(directory/"best.pt", 0, 0)
-            report.update(initial_validation=metrics, best_validation_accuracy=best)
-            atomic_json(status_path, report)
-            print(json.dumps(dict(epoch=0, heldout_accuracy=best)), flush=True)
-        for epoch in range(start_epoch, args.epochs+1):
-            order = list(range(len(training)))
-            random.Random(7100+epoch).shuffle(order)
-            for position in range(next_shard if epoch == start_epoch else 0, len(order)):
-                episodes = torch.load(path(training[order[position]]), map_location="cpu", weights_only=False)
-                if any(fingerprint(episode) in heldout_hashes for episode in episodes):
-                    raise RuntimeError("Training/validation episode overlap")
-                dataset = make_dataset(episodes)
-                del episodes
-                report.update(epoch=epoch, shard=position+1, total_shards=len(training))
-                atomic_json(status_path, report)
-                stats = ppo_update(model, optimizer, dataset, scheduler=scheduler, mode="imitation",
-                    **cfg.ppo_kwargs(), v_min=cfg.v_min, v_max=cfg.v_max, v_bins=cfg.v_bins)
-                del dataset
-                metrics = action_metrics(model, validation)
-                history.append(dict(epoch=epoch, shard=position+1, metrics=metrics, loss=stats.pg_loss))
-                if metrics["accuracy"] > best:
-                    best = metrics["accuracy"]
-                    save_checkpoint(directory/"best.pt", epoch, position+1)
-                save_checkpoint(last, epoch, position+1, resume=True)
-                report.update(best_validation_accuracy=best, last_validation=metrics)
-                atomic_json(status_path, report)
-                print(json.dumps(dict(epoch=epoch, shard=position+1, heldout_accuracy=metrics["accuracy"])), flush=True)
+            best = score_initial_weights(model, validation, history, **common)
+        best = train_imitation(model, optimizer, scheduler, cfg, training, validation, heldout_hashes,
+            epochs=args.epochs, start_epoch=start_epoch, next_shard=next_shard, best=best, history=history,
+            **common)
         report["status"] = "evaluating_training"
         atomic_json(status_path, report)
-        scores = []
-        for entry in training:
-            episodes = torch.load(path(entry), map_location="cpu", weights_only=False)
-            dataset = make_dataset(episodes)
-            del episodes
-            scores.append(action_metrics(model, dataset))
-            del dataset
-        report["training_metrics"] = combine_metrics(scores)
+        report["training_metrics"] = score_training_shards(model, training)
         report["status"] = "complete"
         atomic_json(status_path, report)
         print(json.dumps(dict(status="complete", training_metrics=report["training_metrics"], best_heldout_accuracy=best)))

@@ -2,16 +2,19 @@
 import asyncio
 from dataclasses import asdict
 import logging
-import os
 from pathlib import Path
 import random
 import time
 import numpy as np
 import torch
 
-from checkpoint_io import load_weights, read_checkpoint, replace_file
-from optimizers import make_optimizer
-from ppo_core import AsyncEpisodeDataset, gae_from_episode, ppo_update
+from pokemon_agent.model.transformer import make_model
+from pokemon_agent.rl.advantages import episode_advantages, normalize_advantages
+from pokemon_agent.rl.buffer import AsyncEpisodeDataset, unpack_episodes
+from pokemon_agent.rl.ppo import ppo_update
+from pokemon_agent.training.checkpoints import (learner_checkpoint_name, restore_learner_checkpoint,
+    save_learner_checkpoint, save_milestone_if_due)
+from pokemon_agent.training.optimizer import make_optimizer
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +27,7 @@ class LearnerActor:
         torch.manual_seed(71)
         np.random.seed(71)
         random.seed(71)
-        self.net = cfg.make_model().to(self.cfg.device)
+        self.net = make_model(cfg.model).to(self.cfg.device)
         self.opt, self.sched = make_optimizer(self.net, self.cfg)
         self.dataset = AsyncEpisodeDataset(cfg.env.act_dim, "cpu")
         self.update_idx = self.total_steps = self.total_episodes = 0
@@ -66,31 +69,12 @@ class LearnerActor:
         return True
 
     def _consume(self, batch):
-        obs, actions, logp, values, variances, rewards, dones, lengths = batch
-        if sum(lengths) != len(actions):
-            raise ValueError("Packed episode lengths do not match action count")
-        # Ray exposes read-only NumPy views. Own the tensors before training.
-        obs = torch.tensor(obs)
-        actions = torch.tensor(actions, dtype=torch.long)
-        logp = torch.tensor(logp, dtype=torch.float32)
-        values = torch.tensor(values, dtype=torch.float32)
-        rewards = torch.tensor(rewards, dtype=torch.float32)
-        dones = torch.tensor(dones, dtype=torch.float32)
-        variances = torch.tensor(variances, dtype=torch.float32)
-        advantages, returns, ids = [], [], []
-        start = 0
+        obs, actions, logp, values, variances, rewards, dones, lengths = unpack_episodes(batch)
+        advantages, returns = episode_advantages(rewards, values, dones, variances, lengths, self.cfg)
+        ids = []
         for length in lengths:
-            end = start + int(length)
-            adv, ret = gae_from_episode(rewards[start:end], values[start:end], dones[start:end],
-                self.cfg.gamma, self.cfg.gae_lambda,
-                variances=variances[start:end] if self.cfg.use_dynamic_lambda else None,
-                lam_min=self.cfg.dynamic_lambda_min, lam_max=self.cfg.dynamic_lambda_max,
-                lam_eps=self.cfg.dynamic_lambda_eps)
-            advantages.append(adv)
-            returns.append(ret)
-            ids.append(torch.full((int(length),), self.total_episodes, dtype=torch.long))
+            ids.append(torch.full((length,), self.total_episodes, dtype=torch.long))
             self.total_episodes += 1
-            start = end
         self.dataset.add_steps(obs, actions, logp, values, torch.cat(advantages), torch.cat(returns),
             torch.zeros(len(actions)), torch.cat(ids))
         # Only newly received player decisions count; optimizer passes never do.
@@ -116,7 +100,7 @@ class LearnerActor:
 
     async def _update(self):
         data = list(self.dataset.swap_out_tensor_cache())
-        data[4] = ((data[4]-data[4].mean()) / (data[4].std(unbiased=False)+1e-8)).clamp(-10, 10)
+        data[4] = normalize_advantages(data[4])
         training = AsyncEpisodeDataset(self.run_cfg.env.act_dim, "cpu")
         training.add_steps(*data)
         stats = ppo_update(self.net, self.opt, training, scheduler=self.sched, mode=self.cfg.mode,
@@ -134,97 +118,35 @@ class LearnerActor:
               f"loss={stats.total_loss:.4f} kl={stats.approx_kl:.5f} "
               f"first_pass={stats.first_pass_fraction:.3f} optimizer_steps={stats.n_mb}", flush=True)
         if self.update_idx % self.cfg.save_every_updates == 0:
-            self._save_checkpoint(self.directory / f"learner_update_{self.update_idx:09d}.pt")
+            self._save_checkpoint(self.directory / learner_checkpoint_name(self.update_idx))
         self._maybe_save_milestone()
 
     def _maybe_save_milestone(self):
-        """Keep a permanent policy-only copy each time new states cross a milestone.
-
-        Regular checkpoints rotate (keep_last); milestones are never deleted and
-        load directly in evaluate.py. A later run started from one gets a fresh optimizer.
-        """
-        every = self.cfg.milestone_every_states
-        if not every:
-            return None
-        reached = self.total_steps // every
-        if reached <= getattr(self, "last_milestone", 0):
-            return None
-        self.last_milestone = reached
-        path = self.directory / "milestones" / f"states-{reached*every:012d}.pt"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        payload = dict(project="ps-ppo-15token-milestone", architecture="readme_15token", format_version=1,
-            phase=self.cfg.mode, model=self.net.state_dict(), model_config=self.net.reproduction_config,
-            milestone_states=reached*every, total_steps=self.total_steps, update_idx=self.update_idx,
-            total_episodes=self.total_episodes, run_cfg=self.run_cfg.as_dict())
-        temporary = path.with_suffix(path.suffix+".tmp")
-        with temporary.open("wb") as stream:
-            torch.save(payload, stream)
-            stream.flush()
-            os.fsync(stream.fileno())
-        replace_file(temporary, path)
-        print(f"[learner] milestone {path.name} at new_states={self.total_steps} update={self.update_idx}", flush=True)
-        return str(path.resolve())
+        self.last_milestone, path = save_milestone_if_due(self.directory, self.net, self.run_cfg,
+            last_milestone=getattr(self, "last_milestone", 0), total_steps=self.total_steps,
+            update_idx=self.update_idx, total_episodes=self.total_episodes)
+        if path:
+            print(f"[learner] milestone {Path(path).name} at new_states={self.total_steps} "
+                  f"update={self.update_idx}", flush=True)
+        return path
 
     def _save_checkpoint(self, path):
-        path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        payload = dict(project="ps-ppo-15token", architecture="readme_15token", format_version=1,
-            model=self.net.state_dict(), model_config=self.net.reproduction_config,
-            run_cfg=self.run_cfg.as_dict(), phase=self.cfg.mode, optimizer=self.opt.state_dict(),
-            scheduler=self.sched.state_dict(), update_idx=self.update_idx, total_steps=self.total_steps,
-            total_episodes=self.total_episodes, torch_rng=torch.get_rng_state(),
-            training_totals=getattr(self, "training_totals", {}),
-            cuda_rng=torch.cuda.get_rng_state_all() if self.cfg.device.startswith("cuda") else None,
-            numpy_rng=np.random.get_state(), python_rng=random.getstate(),
-            pending=self.dataset.tensorize() if len(self.dataset) else None)
-        temporary = path.with_suffix(path.suffix+".tmp")
-        with temporary.open("wb") as stream:
-            torch.save(payload, stream)
-            stream.flush()
-            os.fsync(stream.fileno())
-        replace_file(temporary, path)
-        if self.cfg.keep_last > 0:
-            for old in sorted(self.directory.glob("learner_update_*.pt"))[:-self.cfg.keep_last]:
-                old.unlink()
-        return str(path.resolve())
+        return save_learner_checkpoint(path, self.net, self.opt, self.sched, self.run_cfg, self.dataset,
+            update_idx=self.update_idx, total_steps=self.total_steps, total_episodes=self.total_episodes,
+            training_totals=getattr(self, "training_totals", {}))
 
     def _load_checkpoint(self, path):
-        checkpoint = read_checkpoint(path)
-        load_weights(self.net, checkpoint)
-        same_phase = checkpoint.get("project") == "ps-ppo-15token" and checkpoint.get("phase") == self.cfg.mode
-        if same_phase:
-            self._check_optimizer_settings(checkpoint)
-            self.opt.load_state_dict(checkpoint["optimizer"])
-            self.sched.load_state_dict(checkpoint["scheduler"])
-            self.update_idx = checkpoint["update_idx"]
-            self.total_steps = checkpoint["total_steps"]
-            self.total_episodes = checkpoint["total_episodes"]
-            self.training_totals = {**getattr(self, "training_totals", {}), **checkpoint.get("training_totals", {})}
-            if checkpoint.get("pending") is not None:
-                self.dataset.add_steps(*checkpoint["pending"])
-            torch.set_rng_state(checkpoint["torch_rng"])
-            np.random.set_state(checkpoint["numpy_rng"])
-            random.setstate(checkpoint["python_rng"])
-            if self.cfg.device.startswith("cuda") and checkpoint.get("cuda_rng") is not None:
-                torch.cuda.set_rng_state_all(checkpoint["cuda_rng"])
+        restored = restore_learner_checkpoint(path, self.net, self.opt, self.sched, self.dataset, self.cfg)
+        if restored:
+            self.update_idx = restored["update_idx"]
+            self.total_steps = restored["total_steps"]
+            self.total_episodes = restored["total_episodes"]
+            self.training_totals = {**getattr(self, "training_totals", {}), **restored["training_totals"]}
         print(f"[learner] loaded {path}; "
-              f"{'resumed optimizer/counters' if same_phase else 'new phase with pretrained weights'}", flush=True)
-
-    def _check_optimizer_settings(self, checkpoint):
-        """Same-phase resume restores saved rates; refuse settings that would be silently ignored."""
-        saved = checkpoint.get("run_cfg", {}).get("learner", {})
-        # Checkpoints written before these settings existed used these values.
-        saved = {"lr_schedule": "historical", "ppo_lr_multipliers": "current", **saved}
-        names = ["lr", "lr_schedule"] + (["ppo_lr_multipliers"] if self.cfg.mode.startswith("ppo") else [])
-        changed = {name: (saved.get(name), getattr(self.cfg, name)) for name in names
-            if saved.get(name) != getattr(self.cfg, name)}
-        if changed:
-            raise ValueError(f"Resuming {self.cfg.mode} would keep the checkpoint's optimizer settings, "
-                f"not the requested ones (saved, requested): {changed}. Pass the saved settings to "
-                "resume this run, or start a new run from an imitation or warmup checkpoint.")
+              f"{'resumed optimizer/counters' if restored else 'new phase with pretrained weights'}", flush=True)
 
     async def save_now(self, path=None):
-        return self._save_checkpoint(path or self.directory / f"learner_update_{self.update_idx:09d}.pt")
+        return self._save_checkpoint(path or self.directory / learner_checkpoint_name(self.update_idx))
 
     async def get_stats(self):
         for task in (self._startup_task, self._task):
