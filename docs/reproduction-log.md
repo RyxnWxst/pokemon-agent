@@ -1,5 +1,18 @@
 # ps-ppo: 15-token reproduction
 
+> **Layout note (Nov 2026).** The code has moved into the `pokemon_agent` package
+> under `src/`, installed with `pip install -e .` from the repository root. The
+> commands below are kept as this run used them. Today, run them from the
+> repository root with the new names: `run_local.py` → `pokemon-agent-local`,
+> `train.py` → `pokemon-agent-train`, `collect.py` → `pokemon-agent-collect`,
+> `imitation.py` → `pokemon-agent-imitate`, `evaluate.py` → `pokemon-agent-evaluate`,
+> `upgrade_checkpoint.py` → `pokemon-agent-upgrade`. Flags are unchanged.
+> `tests/tiny_model.json` is now `tests/fixtures/tiny_model.json`, the Showdown
+> plugin is `showdown-plugin/rlspawn.ts`, and the file table further down maps to
+> the package as described in the root `README.md`. Run outputs now go under the
+> current folder: move the local `checkpoints/`, `logs/` and `data/` folders out of
+> `ps-ppo-15token/` to the repository root, or set `POKEMON_AGENT_HOME` to the old folder.
+
 This project reproduces the upstream ps-ppo README result: a 15-token Transformer
 policy is trained by imitating `SimpleHeuristicsPlayer`, then trained by PPO
 self-play for about 250 million states. The upstream README reports more than

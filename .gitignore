@@ -6,3 +6,5 @@ checkpoints/
 .ray/
 showdown/
 data/
+*.egg-info/
+build/
