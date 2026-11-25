@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pokemon-agent"
+version = "0.1.0"
+description = "A 15-token Transformer trained by imitation and PPO self-play for Pokémon Showdown gen9randombattle"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.12"
+# Install the CUDA build of PyTorch first if you have a GPU; see README.md.
+# requirements-lock.txt pins the full tested environment.
+dependencies = [
+    "torch==2.7.1",
+    "ray==2.48.0",
+    "poke-env==0.15.0",
+    "numpy==2.2.6",
+]
+
+[project.scripts]
+pokemon-agent-local = "pokemon_agent.cli.run_local:main"
+pokemon-agent-train = "pokemon_agent.cli.train:run"
+pokemon-agent-collect = "pokemon_agent.cli.collect:run"
+pokemon-agent-imitate = "pokemon_agent.cli.imitate:main"
+pokemon-agent-evaluate = "pokemon_agent.cli.evaluate:run"
+pokemon-agent-upgrade = "pokemon_agent.cli.upgrade_checkpoint:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+pokemon_agent = ["assets/*.json", "vendor/*.json", "vendor/*.md"]
