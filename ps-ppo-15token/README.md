@@ -430,6 +430,7 @@ evidence that the new reward helps.
 | --- | --- | --- | --- | --- |
 | 5M | 86.0% | | 86.0% | 83.7–88.0% |
 | 10M | 87.1% | 87.1% | 87.1% | 85.6–88.5% |
+| 15M | 86.4% | | 86.4% | 84.1–88.4% |
 
 The `reward-selfplay` critic warmup lowered critic loss from 3.38 to about
 2.6 over 10 updates. PPO started at 09:36. The first 40 or so updates ran
