@@ -414,13 +414,28 @@ test against the corrected heuristic, with actions sampled from the policy.
 
 | Model | Battles | Win rate | 95% interval | Notes |
 | --- | --- | --- | --- | --- |
-| Baseline: 200M self-play | 2,000 | 87.0% | 85.4–88.4% | Model to beat; 130M scored 84.9% |
-| `reward-selfplay` | | | | Running since 09:36 |
+| Baseline: 200M self-play | 2,000 | 87.0% | 85.4–88.4% | 130M scored 84.9% |
+| `reward-selfplay`, 10M states | 2,000 | 87.1% | 85.6–88.5% | Current best; stage running |
 | `vs-heuristic` | | | | Not started |
 | `lr-decay` | | | | Not started |
 
+The 10M milestone was promoted because its pooled result is higher, but by
+0.15 points. That is well within noise, so it is a tie with the baseline, not
+evidence that the new reward helps.
+
+`reward-selfplay` milestone tests. Every milestone gets 1,000 battles at seed
+71; a second 1,000 at seed 72 only when the first beats the best.
+
+| Milestone | Seed 71 | Seed 72 | Pooled | 95% interval |
+| --- | --- | --- | --- | --- |
+| 5M | 86.0% | | 86.0% | 83.7–88.0% |
+| 10M | 87.1% | 87.1% | 87.1% | 85.6–88.5% |
+
 The `reward-selfplay` critic warmup lowered critic loss from 3.38 to about
-2.6 over 10 updates.
+2.6 over 10 updates. PPO started at 09:36. The first 40 or so updates ran
+slower, about 840 states/s, because the learning rate was still warming up:
+KL stayed below the early-stop threshold, so every update ran all 3 passes.
+From 5M states on it ran at about 1,460 states/s.
 
 ## What changed
 
