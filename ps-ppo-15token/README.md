@@ -29,9 +29,17 @@ actions sampled from the policy, unless noted.
 | 180M states | 426 | 85.2% | 81.8–88.0% |
 | 200M states | 431 | 86.2% | 82.9–88.9% |
 
-The 130M checkpoint scored highest and is saved as
-`checkpoints/best/ppo-readme-130m.pt`. Its range overlaps those of 180M and
-200M, so the three are statistically indistinguishable at 500 battles.
+The 130M checkpoint scored highest at 500 battles and is saved as
+`checkpoints/best/ppo-readme-130m.pt`. A later 2,000-battle test of each put
+200M ahead:
+
+| Checkpoint | Wins (2,000 battles) | Win rate | 95% interval |
+| --- | --- | --- | --- |
+| 130M states | 1,697 | 84.9% | 83.2–86.4% |
+| **200M states** | 1,739 | **87.0%** | 85.4–88.4% |
+
+130M's higher 500-battle score was luck. **200M is the self-play run's best
+model** and the starting point for the experiments below.
 
 Against the stock heuristic, the seed won 39.8% and the 10M checkpoint 56.0%.
 That is close to the corrected-heuristic numbers, so the corrected heuristic is
@@ -301,7 +309,7 @@ Evaluation is run by hand on milestones, during or after training:
 ## Experiments after 200M
 
 These experiments started on Nov 27, 2026, from the better of the 130M and
-200M checkpoints. They test four ideas, one stage after another, using
+200M checkpoints, which was 200M. They test four ideas, one stage after another, using
 `experiments.py`, which runs unattended.
 
 ### 1. Faint-reward fix
@@ -399,7 +407,20 @@ Self-play runs at about 1,500 states/s, so the first stage takes about
 7.5 hours. Heuristic games yield half the training states per battle, so the
 later stages will be slower. The whole plan should take about 1.5 days.
 
-Results will be added here as the stages finish.
+### Results so far
+
+The pipeline started on Nov 27, 2026, at 09:21 Central. Each row is a pooled
+test against the corrected heuristic, with actions sampled from the policy.
+
+| Model | Battles | Win rate | 95% interval | Notes |
+| --- | --- | --- | --- | --- |
+| Baseline: 200M self-play | 2,000 | 87.0% | 85.4–88.4% | Model to beat; 130M scored 84.9% |
+| `reward-selfplay` | | | | Running since 09:36 |
+| `vs-heuristic` | | | | Not started |
+| `lr-decay` | | | | Not started |
+
+The `reward-selfplay` critic warmup lowered critic loss from 3.38 to about
+2.6 over 10 updates.
 
 ## What changed
 

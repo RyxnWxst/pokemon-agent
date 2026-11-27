@@ -24,8 +24,11 @@ actions sampled from the policy:
 | --- | --- | --- |
 | Imitation only | 42.0% | 37.8–46.4% |
 | Self-play, 50M states | 75.0% | 71.0–78.6% |
-| Self-play, 130M states | **87.2%** | 84.0–89.8% |
+| Self-play, 130M states | 87.2% | 84.0–89.8% |
 | Self-play, 200M states | 86.2% | 82.9–88.9% |
+
+A larger 2,000-battle test separated the two best checkpoints: **200M won
+87.0%** (85.4–88.4%) and 130M won 84.9% (83.2–86.4%).
 
 Experiments that continue from this model are in progress: a corrected faint
 reward, HP-lead reward shaping, training against the heuristic, and
