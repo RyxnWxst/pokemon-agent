@@ -415,28 +415,49 @@ test against the corrected heuristic, with actions sampled from the policy.
 | Model | Battles | Win rate | 95% interval | Notes |
 | --- | --- | --- | --- | --- |
 | Baseline: 200M self-play | 2,000 | 87.0% | 85.4–88.4% | 130M scored 84.9% |
-| `reward-selfplay`, 10M states | 2,000 | 87.1% | 85.6–88.5% | Current best; stage running |
-| `vs-heuristic` | | | | Not started |
+| `reward-selfplay`, 25M states | 2,000 | 87.5% | 85.9–88.8% | Current best; stage finished 17:06 |
+| `vs-heuristic` | | | | Started 17:07 from the 25M model |
 | `lr-decay` | | | | Not started |
 
-The 10M milestone was promoted because its pooled result is higher, but by
-0.15 points. That is well within noise, so it is a tie with the baseline, not
-evidence that the new reward helps.
+#### Stage 1: `reward-selfplay` (finished)
 
-`reward-selfplay` milestone tests. Every milestone gets 1,000 battles at seed
-71; a second 1,000 at seed 72 only when the first beats the best.
+Self-play from the 200M model with the fixed faint reward and HP shaping
+(c = 0.5), 40M states, 09:31 to 17:06.
+
+Every milestone gets 1,000 battles at seed 71; a second 1,000 at seed 72 only
+when the first beats the best.
 
 | Milestone | Seed 71 | Seed 72 | Pooled | 95% interval |
 | --- | --- | --- | --- | --- |
 | 5M | 86.0% | | 86.0% | 83.7–88.0% |
 | 10M | 87.1% | 87.1% | 87.1% | 85.6–88.5% |
 | 15M | 86.4% | | 86.4% | 84.1–88.4% |
+| 20M | 86.1% | | 86.1% | 83.8–88.1% |
+| 25M | 87.3% | 87.6% | 87.5% | 85.9–88.8% |
+| 30M | 86.7% | | 86.7% | 84.5–88.7% |
+| 35M | 86.9% | | 86.9% | 84.7–88.9% |
+| 40M | 85.4% | | 85.4% | 83.1–87.5% |
 
-The `reward-selfplay` critic warmup lowered critic loss from 3.38 to about
-2.6 over 10 updates. PPO started at 09:36. The first 40 or so updates ran
-slower, about 840 states/s, because the learning rate was still warming up:
-KL stayed below the early-stop threshold, so every update ran all 3 passes.
-From 5M states on it ran at about 1,460 states/s.
+- **Result: a tie with the baseline.** Every milestone stayed between 85.4%
+  and 87.5%. The 10M and then the 25M milestone were promoted because their
+  pooled results were higher, but 25M is only 0.5 points above the baseline,
+  about half a standard error. This is no evidence that the new reward helps or
+  hurts.
+- **Why HP shaping does little here:** once the critic has learned the shaped
+  values V − Φ, each step's TD error equals the unshaped one,
+  r + γΦ′ − Φ + γ(V′ − Φ′) − (V − Φ) = r + γV′ − V. GAE sums TD errors, so the
+  policy gradient is unchanged. Shaping helps only while the critic is
+  inaccurate, which is mostly early in training. The critic warmup fitted it
+  before PPO began.
+- **Why the faint fix does little here:** apart from timing, which the critic
+  absorbs the same way, its only lasting effect is a small margin bonus. A win
+  is worth 1 + 0.1 × (our Pokemon left), a loss −1 − 0.1 × (theirs left).
+- **Training:** the critic warmup lowered critic loss from 3.38 to about 2.6
+  over 10 updates. The first 40 or so PPO updates ran at about 840 states/s,
+  because during the fresh learning-rate warmup KL stayed below the early-stop
+  threshold and every update ran all 3 passes. From 5M states on it ran at
+  about 1,460 states/s, with updates stopping after 9 optimizer steps.
+  Entropy fell from 0.52 to about 0.44.
 
 ## What changed
 

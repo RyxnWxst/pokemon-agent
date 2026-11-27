@@ -32,7 +32,9 @@ A larger 2,000-battle test separated the two best checkpoints: **200M won
 
 Experiments that continue from this model are in progress: a corrected faint
 reward, HP-lead reward shaping, training against the heuristic, and
-learning-rate decay. See
+learning-rate decay. The first stage, self-play with the corrected reward and
+HP shaping, finished with a best of 87.5% over 2,000 battles, a tie with the
+200M model. See
 [Experiments after 200M](ps-ppo-15token/README.md#experiments-after-200m).
 
 Trained checkpoints are not stored in this repository; each is about 233 MB.
