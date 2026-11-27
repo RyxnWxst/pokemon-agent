@@ -1,1 +1,35 @@
 # pokemon-agent
+
+A reinforcement-learning agent for Pokemon Showdown Gen 9 Random Battles. It
+reproduces the result claimed by
+[Nebraskinator/ps-ppo](https://github.com/Nebraskinator/ps-ppo): more than 85%
+wins against poke-env's `SimpleHeuristicsPlayer`.
+
+All code and full instructions are in [`ps-ppo-15token/`](ps-ppo-15token/README.md).
+
+## Approach
+
+1. **Imitation:** a 15-token Transformer policy (about 58M parameters) learns to
+   copy the heuristic player from 50,000 recorded battles. It reaches 94.97%
+   agreement with the heuristic's choices on held-out games.
+2. **Self-play PPO:** the policy then trains against copies of itself, using
+   upstream's README-era recipe on one RTX 3070.
+
+## Results
+
+500 battles per checkpoint against the corrected `SimpleHeuristicsPlayer`, with
+actions sampled from the policy:
+
+| Model | Win rate | 95% interval |
+| --- | --- | --- |
+| Imitation only | 42.0% | 37.8–46.4% |
+| Self-play, 50M states | 75.0% | 71.0–78.6% |
+| Self-play, 130M states | **87.2%** | 84.0–89.8% |
+| Self-play, 200M states | 86.2% | 82.9–88.9% |
+
+Experiments that continue from this model are in progress: a corrected faint
+reward, HP-lead reward shaping, training against the heuristic, and
+learning-rate decay. See
+[Experiments after 200M](ps-ppo-15token/README.md#experiments-after-200m).
+
+Trained checkpoints are not stored in this repository; each is about 233 MB.

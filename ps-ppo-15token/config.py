@@ -75,7 +75,11 @@ class LearnerConfig:
     temp_end: float = 1.
     temp_total_steps: int = 250_000_000
     lr: float = 1e-4
+    # "historical": warmup, hold, slow decay by optimizer step (de8cc69).
+    # "constant": fixed rate. "linear": warmup, then decay linearly with new
+    # states to lr_final_fraction * lr at max_total_steps (needs a state target).
     lr_schedule: str = "historical"
+    lr_final_fraction: float = 0.
     lr_warmup_steps: int = 1000
     lr_hold_steps: int = 20000
     lr_total_steps: int = 500000
@@ -104,6 +108,10 @@ class LearnerConfig:
     resume_path: str | None = None
     max_updates: int = 0
     max_total_steps: int = 0
+    # Who the trained policy plays: "self" (both sides are the current policy) or
+    # "heuristic" (the corrected SimpleHeuristicsPlayer; only our side is trained).
+    # Mode ppo_vs_teacher always uses the heuristic.
+    opponent: str = "self"
     # Retained for worker/report compatibility; replay is disabled in this project.
     teacher_probability: float = .5
     replay_steps: int = 0
@@ -119,12 +127,24 @@ class LearnerConfig:
             raise ValueError("Microbatch size cannot be negative")
         if self.kl_stop_rule not in ("minibatch", "historical"):
             raise ValueError("KL stopping rule must be minibatch or historical")
-        if self.lr_schedule not in ("historical", "constant"):
+        if self.lr_schedule not in ("historical", "constant", "linear"):
             raise ValueError("Unknown learning-rate schedule")
+        if self.lr_schedule == "linear" and self.max_total_steps <= 0:
+            raise ValueError("The linear learning-rate schedule decays over a state target; set max_total_steps")
+        if not 0 <= self.lr_final_fraction <= 1:
+            raise ValueError("lr_final_fraction must be between 0 and 1")
+        if self.opponent not in ("self", "heuristic"):
+            raise ValueError("Opponent must be self or heuristic")
+        if self.opponent == "heuristic" and self.mode == "imitation":
+            raise ValueError("Imitation does not play an opponent")
         if self.ppo_lr_multipliers not in PPO_LR_MULTIPLIERS:
             raise ValueError("PPO learning-rate multipliers must be historical or current")
         if self.temp_start != 1 or self.temp_end != 1:
             raise ValueError("Use temperature 1 so PPO behavior and update log probabilities agree")
+
+    @property
+    def heuristic_opponent(self):
+        return self.mode == "ppo_vs_teacher" or self.opponent == "heuristic"
 
     def get_temp(self, total_steps):
         return 1.
@@ -142,6 +162,18 @@ class RewardConfig:
     use_faint_reward: bool = True
     faint_self: float = -.1
     faint_opp: float = .1
+    # "fixed" reads the fainted flag. "legacy" reproduces runs made before the fix,
+    # which read the "ability unknown" flag: +0.1 when an opponent Pokemon with an
+    # unknown ability appeared, never a penalty for our own faints. See rewards.py.
+    faint_index: str = "fixed"
+    # Potential-based HP-lead shaping coefficient c; 0 disables. See rewards.py.
+    hp_shaping: float = 0.
+
+    def __post_init__(self):
+        if self.faint_index not in ("fixed", "legacy"):
+            raise ValueError("faint_index must be fixed or legacy")
+        if self.hp_shaping < 0:
+            raise ValueError("hp_shaping cannot be negative")
 
 
 @dataclass(frozen=True)
