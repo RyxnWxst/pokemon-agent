@@ -39,8 +39,12 @@ def get_pokemon_metadata(vocab_lists: Dict[str, List[str]]) -> Dict[str, Any]:
     p_map["height_int"] = curr
     curr += 1
     p_map["flags_raw"] = (curr, curr + 12) # Active, Fainted, Tera, Status Counter
-    curr += 12
+    # The fainted flag is the second entry of the flags block (encode_pokemon_body_inplace).
     faint_internal_idx = curr + 1
+    curr += 12
+    # Earlier code took this index after the flags block, which lands on the
+    # mechanics block's "ability unknown" flag. Kept only to reproduce those runs.
+    legacy_faint_internal_idx = curr + 1
     p_map["mechanics_raw"] = (curr, curr + 5) # Fog of War block
     curr += 5
     p_map["types_raw"] = (curr, curr + (v_type * 2))
@@ -57,7 +61,8 @@ def get_pokemon_metadata(vocab_lists: Dict[str, List[str]]) -> Dict[str, Any]:
     return {
         "scalar_dim": curr,
         "feature_map": p_map,
-        "faint_internal_idx": faint_internal_idx
+        "faint_internal_idx": faint_internal_idx,
+        "legacy_faint_internal_idx": legacy_faint_internal_idx,
     }
 
 def estimate_stat(mon: Any, stat_name: str) -> int:

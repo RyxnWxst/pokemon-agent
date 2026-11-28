@@ -30,6 +30,7 @@ from poke_env.player import DefaultBattleOrder
 from poke_env.player.baselines import SimpleHeuristicsPlayer
 from config import RunConfig
 from obs_assembler import ObservationAssembler
+from rewards import episode_rewards
 
 # Global Constants
 ZOMBIE_LIMIT_S: Final[float] = 300.0  
@@ -459,7 +460,7 @@ class PokeEnvVectorWrapper:
                 server_configuration=self.server_conf, max_concurrent_battles=self.cfg.rollout.rooms_per_pair,
                 battle_format=self.cfg.env.battle_format, start_listening=True, log_level=40
             )
-            if self.cfg.learner.mode == "ppo_vs_teacher":
+            if self.cfg.learner.heuristic_opponent:
                 pB = TrainingHeuristicPlayer(**opponent_args)
             else:
                 pB = SyncBridgePlayer(cfg=self.cfg, event_queue=self.event_queue,
@@ -643,31 +644,13 @@ class RolloutWorker:
         if tag in self._traj: 
             buf = self._traj.pop(tag)
             if buf["act"]: 
-                if self.cfg.learner.mode == "ppo_vs_teacher":
+                if self.cfg.learner.heuristic_opponent:
                     self.model_games += 1
                     self.model_wins += int(bool(battle.won))
                 T = len(buf["act"])
                 obs_stacked = np.stack(buf["obs"], axis=0)
-                
-                terminal_reward = (self.cfg.reward.terminal_win if battle.won else
-                    self.cfg.reward.terminal_loss if battle.lost else 0.)
-                rewards = np.zeros(T, dtype=np.float32)
-                
-                if self.cfg.reward.use_faint_reward:
-                    b_start, b_end = self.assembler.offsets["pokemon_body"]
-                    faint_idx = self.assembler.meta["faint_internal_idx"]
-                    
-                    body_history = obs_stacked[:, b_start:b_end].reshape(T, 12, self.assembler.meta["dim_pokemon_body"])
-                    is_fainted = body_history[:, :, faint_idx] > 0.5
-                    
-                    ds = np.diff(is_fainted[:, :6].sum(axis=1))
-                    do = np.diff(is_fainted[:, 6:].sum(axis=1))
-
-                    # Apply to rewards[:-1] to align the consequence with the action
-                    rewards[:-1] += (np.maximum(0, ds) * float(self.cfg.reward.faint_self)) + \
-                                    (np.maximum(0, do) * float(self.cfg.reward.faint_opp))
-
-                rewards[-1] += terminal_reward
+                rewards = episode_rewards(obs_stacked, bool(battle.won), bool(battle.lost), self.cfg.reward,
+                    self.cfg.learner.gamma, self.assembler.offsets, self.assembler.meta)
                 dones = np.zeros(T, dtype=np.float32)
                 dones[-1] = 1.0
                 

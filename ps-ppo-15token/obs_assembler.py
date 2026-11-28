@@ -304,6 +304,7 @@ class ObservationAssembler:
                 },
             },
             "faint_internal_idx": pok_meta["faint_internal_idx"], # Index 113
+            "legacy_faint_internal_idx": pok_meta["legacy_faint_internal_idx"], # Index 125 (pre-fix reward)
             "vocab_pokemon": len(vocab_lists.get("pokemon.species", [])) + 1,
             "vocab_item": len(vocab_lists.get("pokemon.item", [])) + 1,
             "vocab_ability": len(vocab_lists.get("pokemon.ability", [])) + 1,

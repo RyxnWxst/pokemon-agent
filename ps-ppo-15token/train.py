@@ -13,7 +13,7 @@ os.environ.setdefault("MKL_NUM_THREADS", "2")
 import ray
 import torch
 from checkpoint_io import atomic_json, model_config, read_checkpoint
-from config import ROOT, LearnerConfig, ModelConfig, RunConfig
+from config import ROOT, LearnerConfig, ModelConfig, RewardConfig, RunConfig
 from inference import InferenceActor, WeightStore
 from learner import LearnerActor
 from worker import RolloutWorker
@@ -50,7 +50,18 @@ def parse_args(argv=None):
         help="PPO backbone/policy/value rates: historical 1/1/1, current 0.5/1/2")
     parser.add_argument("--epochs", type=int, default=defaults.update_epochs)
     parser.add_argument("--learning-rate", type=float, default=defaults.lr)
-    parser.add_argument("--lr-schedule", choices=("historical", "constant"), default=defaults.lr_schedule)
+    parser.add_argument("--lr-schedule", choices=("historical", "constant", "linear"), default=defaults.lr_schedule,
+        help="linear decays with new states to --lr-final-fraction at --total-steps")
+    parser.add_argument("--lr-final-fraction", type=float, default=defaults.lr_final_fraction)
+    parser.add_argument("--lr-warmup-steps", type=int, default=defaults.lr_warmup_steps,
+        help="Optimizer steps of linear warmup at the start of a phase")
+    parser.add_argument("--opponent", choices=("self", "heuristic"), default=defaults.opponent,
+        help="Train against the current policy (self-play) or the corrected heuristic; ppo_vs_teacher implies heuristic")
+    rewards = RewardConfig()
+    parser.add_argument("--faint-reward", choices=("fixed", "legacy"), default=rewards.faint_index,
+        help="fixed reads the fainted flag; legacy reproduces runs before the index fix")
+    parser.add_argument("--hp-shaping", type=float, default=rewards.hp_shaping,
+        help="Potential-based HP-lead shaping coefficient; 0 disables")
     parser.add_argument("--total-steps", type=int, default=0, help="New decisions in this phase; 0 is unlimited")
     parser.add_argument("--max-updates", type=int, default=0)
     parser.add_argument("--checkpoint-dir")
@@ -78,6 +89,12 @@ def parse_args(argv=None):
         parser.error(str(exc))
     if args.no_resume and args.resume_from:
         parser.error("--no-resume and --resume-from cannot be combined")
+    if args.lr_schedule == "linear" and args.total_steps <= 0:
+        parser.error("--lr-schedule linear decays over --total-steps; set it")
+    if not 0 <= args.lr_final_fraction <= 1 or args.lr_warmup_steps < 0 or args.hp_shaping < 0:
+        parser.error("--lr-final-fraction must be in [0, 1]; warmup steps and --hp-shaping cannot be negative")
+    if args.opponent == "heuristic" and args.mode == "imitation":
+        parser.error("Imitation does not play an opponent")
     return args
 
 
@@ -105,13 +122,15 @@ async def main():
         rollout=replace(cfg.rollout, target_concurrent_battles=args.concurrency, rooms_per_pair=args.concurrency,
             learn_max_pending_episodes=max(cfg.rollout.learn_max_pending_episodes, 2*args.concurrency)),
         learner=replace(cfg.learner, mode=args.mode, device=args.device, lr=args.learning_rate, lr_schedule=args.lr_schedule,
+            lr_final_fraction=args.lr_final_fraction, lr_warmup_steps=args.lr_warmup_steps, opponent=args.opponent,
             minibatch_size=args.batch_size, update_epochs=args.epochs, steps_per_update=args.steps_per_update,
             microbatch_size=args.microbatch_size, kl_stop_rule=args.kl_stop_rule,
             ppo_lr_multipliers=args.lr_multipliers,
             max_total_steps=args.total_steps, max_updates=args.max_updates, resume=not args.no_resume,
             resume_path=str(Path(resume).resolve()) if resume else None,
             ckpt_dir=str(checkpoint_dir), save_every_updates=args.save_every,
-            milestone_every_states=args.milestone_every))
+            milestone_every_states=args.milestone_every),
+        reward=replace(cfg.reward, faint_index=args.faint_reward, hp_shaping=args.hp_shaping))
     state = dict(status="starting", architecture="readme_15token", mode=args.mode,
         target_new_states=args.total_steps or None, checkpoint_dir=str(checkpoint_dir),
         model_config=cfg.as_dict()["model"], server_port=args.ports[0], server_ports=args.ports,
@@ -121,7 +140,10 @@ async def main():
     state["learner_settings"] = dict(steps_per_update=args.steps_per_update, minibatch_size=args.batch_size,
         microbatch_size=args.microbatch_size, kl_stop_rule=args.kl_stop_rule, ppo_epochs=args.epochs,
         base_learning_rate=args.learning_rate, lr_schedule=args.lr_schedule,
+        lr_final_fraction=args.lr_final_fraction, lr_warmup_steps=args.lr_warmup_steps,
         ppo_lr_multipliers=args.lr_multipliers, milestone_every_states=args.milestone_every)
+    state["opponent"] = "heuristic" if cfg.learner.heuristic_opponent else "self"
+    state["reward"] = cfg.as_dict()["reward"]
     started = last_progress = time.monotonic()
     last_steps = -1
 

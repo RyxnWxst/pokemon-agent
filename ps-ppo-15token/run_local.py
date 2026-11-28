@@ -52,6 +52,8 @@ def main():
     parser.add_argument("--servers", type=int, default=1,
         help="Showdown processes on consecutive ports (training only); each runs on its own CPU core")
     parser.add_argument("--entry", choices=("train", "collect", "evaluate"), default="train")
+    parser.add_argument("--skip-build", action="store_true",
+        help="Start every server without rebuilding Showdown, e.g. for an evaluation while training servers run")
     args, training_args = parser.parse_known_args()
     server_dir = Path(args.server_dir).resolve()
     if not (server_dir / "pokemon-showdown").is_file():
@@ -72,7 +74,7 @@ def main():
         # Start servers one at a time. Only the first builds; once it listens the
         # build is complete, and the rest reuse it without rewriting shared files.
         for index, port in enumerate(ports):
-            servers.append(start_server(server_dir, port, logs, flags, skip_build=index > 0))
+            servers.append(start_server(server_dir, port, logs, flags, skip_build=args.skip_build or index > 0))
             wait_until_listening(servers[-1], port, timeout=180 if index == 0 else 60)
         port_flags = ["--ports", *map(str, ports)] if len(ports) > 1 else ["--port", str(args.port)]
         command = [sys.executable, "-u", str(ROOT / f"{args.entry}.py"), *port_flags, *training_args]

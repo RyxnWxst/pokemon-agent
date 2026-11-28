@@ -9,10 +9,11 @@ All Python code lives in this directory. The Python environment and a built
 Pokemon Showdown server are external dependencies. So is the imitation dataset,
 which lives in the parent project (see [Step 1](#step-1-imitation)).
 
-## Results so far
+## Results
 
-The run is in progress (as of Nov 18, 2026). Each row is 500 battles against the
-corrected heuristic, with actions sampled from the policy.
+The self-play run reached the upstream README's target. It was stopped at
+200.8M states. Each row is 500 battles against the corrected heuristic, with
+actions sampled from the policy, unless noted.
 
 | Checkpoint | Wins | Win rate | 95% interval |
 | --- | --- | --- | --- |
@@ -21,10 +22,32 @@ corrected heuristic, with actions sampled from the policy.
 | 10M states | 286 | 57.2% | 52.8–61.5% |
 | 20M states | 312 | 62.4% | 58.1–66.5% |
 | 50M states | 375 | 75.0% | 71.0–78.6% |
+| 80M states | 403 | 80.6% | 76.9–83.8% |
+| 100M states (1,000 battles) | 799 | 79.9% | 77.3–82.3% |
+| 110M states | 407 | 81.4% | 77.8–84.6% |
+| **130M states** | 436 | **87.2%** | 84.0–89.8% |
+| 180M states | 426 | 85.2% | 81.8–88.0% |
+| 200M states | 431 | 86.2% | 82.9–88.9% |
+
+The 130M checkpoint scored highest at 500 battles and is saved as
+`checkpoints/best/ppo-readme-130m.pt`. A later 2,000-battle test of each put
+200M ahead:
+
+| Checkpoint | Wins (2,000 battles) | Win rate | 95% interval |
+| --- | --- | --- | --- |
+| 130M states | 1,697 | 84.9% | 83.2–86.4% |
+| **200M states** | 1,739 | **87.0%** | 85.4–88.4% |
+
+130M's higher 500-battle score was luck. **200M is the self-play run's best
+model** and the starting point for the experiments below.
 
 Against the stock heuristic, the seed won 39.8% and the 10M checkpoint 56.0%.
 That is close to the corrected-heuristic numbers, so the corrected heuristic is
 used as the single yardstick. Result files are `logs/*eval*.json`.
+
+Follow-up experiments from this model (reward fixes, training against the
+heuristic, learning-rate decay) are described in
+[Experiments after 200M](#experiments-after-200m).
 
 ## Pipeline
 
@@ -33,12 +56,17 @@ used as the single yardstick. Result files are `logs/*eval*.json`.
 | 1 | Imitation: 50,000 heuristic battles, 15 passes | `checkpoints/seed/imitation50k-best.pt` (94.97% held-out agreement) |
 | 2 | Add move-category inputs (outputs unchanged) | `checkpoints/seed/imitation50k-best-category.pt` |
 | 3 | Critic-only warmup, 11 updates | `checkpoints/warmup-category/learner_update_000000011.pt` |
-| 4 | PPO self-play to 250M states | `checkpoints/ppo-readme/` |
+| 4 | PPO self-play (target 250M states, stopped at 200.8M) | `checkpoints/ppo-readme/` |
 | 5 | Evaluate milestones, by hand | `logs/ppo-readme-eval-*.json` |
 
 The commands below are the ones this run used. They use this run's directory
 names, so rerunning them here continues this run. For a separate reproduction,
 pick new `--checkpoint-dir` names.
+
+This run used the faint reward as it was before the
+[faint-reward fix](#1-faint-reward-fix). The fixed reward is now the default,
+so the warmup and PPO commands below pass `--faint-reward legacy` to match the
+run exactly.
 
 ## Setup
 
@@ -175,7 +203,7 @@ The imitation critic was frozen, so the value head starts untrained. Warmup
 trains only the critic token and value head while the policy stays fixed:
 
 ```powershell
-& $python run_local.py --server-dir $server --servers 4 --workers 4 --concurrency 128 --matmul-precision high --mode warmup --resume-from checkpoints/seed/imitation50k-best-category.pt --lr-schedule constant --max-updates 11 --checkpoint-dir checkpoints/warmup-category
+& $python run_local.py --server-dir $server --servers 4 --workers 4 --concurrency 128 --matmul-precision high --mode warmup --resume-from checkpoints/seed/imitation50k-best-category.pt --lr-schedule constant --max-updates 11 --faint-reward legacy --checkpoint-dir checkpoints/warmup-category
 ```
 
 The warmup ran 11 updates, about 360,700 states. Critic loss fell from 4.89 to
@@ -186,14 +214,16 @@ same length.
 ## Step 4: PPO self-play
 
 ```powershell
-& $python run_local.py --server-dir $server --servers 6 --workers 6 --concurrency 192 --matmul-precision high --mode ppo --resume-from checkpoints/warmup-category/learner_update_000000011.pt --total-steps 250000000 --checkpoint-dir checkpoints/ppo-readme
+& $python run_local.py --server-dir $server --servers 6 --workers 6 --concurrency 192 --matmul-precision high --mode ppo --resume-from checkpoints/warmup-category/learner_update_000000011.pt --total-steps 250000000 --faint-reward legacy --checkpoint-dir checkpoints/ppo-readme
 ```
 
 **Rollouts:**
 - Six Showdown servers run on ports 8002–8007, with one rollout worker per server.
 - 192 battles run at once, 32 per worker.
 - Both sides use the current policy.
-- Rewards are +1 for a win, -1 for a loss and ±0.1 per faint. Ties score 0.
+- Rewards are +1 for a win, -1 for a loss and ±0.1 per faint, with ties
+  scoring 0. As run, the faint part was broken; see the
+  [faint-reward fix](#1-faint-reward-fix).
 
 **Learner:** the README-era recipe is the default, so no learner flags are needed.
 
@@ -255,7 +285,7 @@ changed; only the rollout setup did.
 | 1–83 | 0–2.73M | Pilot: 4 servers, 4 workers, 128 battles, `--worker-queue-episodes 400` |
 | 84–92 | 2.73–3.02M | 6 servers, 6 workers, 192 battles, queue 400. KL spiked, so the run was stopped. |
 | 93–176 | 3.02–5.80M | Default queue. Workers slowed down as they aged (fixed below). |
-| 177 onward | 5.80M onward | The command above, with the worker fix |
+| 177–6,123 | 5.80–200.8M | The command above, with the worker fix. Stopped at 200.8M. |
 
 ## Step 5: Evaluation
 
@@ -272,9 +302,291 @@ Evaluation is run by hand on milestones, during or after training:
 - The opponent defaults to the corrected heuristic. `--opponent stock` restores
   poke-env 0.15's original stat estimate, which predates the April 2026
   correction and the upstream README's result.
+- `--opponent max_power` and `--opponent random` play poke-env's
+  `MaxBasePowerPlayer` and `RandomPlayer`.
+- `--opponent-checkpoint <path>` plays another checkpoint instead, with the same
+  action selection. The report counts wins for `--checkpoint`.
 - `--greedy` always picks the policy's top action instead of sampling. Keep one
   protocol when comparing checkpoints.
 - Results include wins, losses, ties and a 95% Wilson interval.
+
+## Experiments after 200M
+
+These experiments started on Nov 27, 2026, from the better of the 130M and
+200M checkpoints, which was 200M. They test four ideas, one stage after another, using
+`experiments.py`, which runs unattended.
+
+### 1. Faint-reward fix
+
+The faint reward is meant to give -0.1 when one of our Pokemon faints and
++0.1 when an opponent's does.
+- **The bug:** a later upstream change to the observation layout made it read
+  the wrong feature: index 125, "ability not yet known", instead of 113,
+  "fainted". Upstream's README-era code (`de8cc69`) read the right one.
+- **What it paid,** measured on 1,000 recorded games: never a penalty for our
+  own faints, and +0.1 about 3 times per game, whenever a new opponent Pokemon
+  with an unknown ability appeared. That averaged +0.31 per game for wins and
+  losses alike, so the 200M run learned almost entirely from win/loss reward.
+- **Now:** the fixed reward is the default and pays +0.09 per game on average
+  for wins and -0.10 for losses. `--faint-reward legacy` reproduces the old
+  behavior.
+
+### 2. HP-lead shaping (`--hp-shaping c`)
+
+This is potential-based shaping (Ng et al., 1999), with
+Phi = c × (our mean HP fraction − the opponent's mean HP fraction).
+- Each decision's reward gets gamma × Phi(next) − Phi(this) added, and Phi is
+  0 once the game ends.
+- Opponent Pokemon not yet seen count as full HP. Observations show them with
+  0 HP, which would otherwise make every reveal look like losing the lead.
+- Both teams start at full HP, so over a game the shaping adds up to almost
+  exactly zero. It can't change which policy is best; it only gives the learner
+  credit earlier. That matters here because GAE uses lambda = 0.75, so each
+  step's credit mostly looks only a few turns ahead.
+- The experiments use c = 0.5.
+
+### 3. Training against the heuristic (`--mode ppo_vs_teacher`)
+
+Same PPO and reward, but the opponent is the corrected `SimpleHeuristicsPlayer`
+instead of the current policy, and only our side's decisions are trained on.
+- It optimizes the evaluated matchup directly. That makes it the most direct
+  way to raise this score, but it is no longer README-style self-play, and the
+  policy may learn the heuristic's habits rather than better play overall.
+- `--opponent heuristic` uses the heuristic for a critic warmup too.
+
+### 4. Learning-rate decay (`--lr-schedule linear`)
+
+The historical schedule counts optimizer steps and decays toward step 500,000.
+KL early stopping keeps each update to about 9 steps, so after 200M states the
+rate had barely moved from 1e-4.
+
+The linear schedule warms up for `--lr-warmup-steps` optimizer steps, then
+decays with new states to `--lr-final-fraction` × the rate at `--total-steps`.
+It follows states rather than steps, so it resumes exactly.
+
+### The pipeline
+
+| Stage | Opponent | New states | Reward | Learning rate |
+| --- | --- | --- | --- | --- |
+| `reward-selfplay` | Self-play | 40M | Fixed faints + HP shaping (c = 0.5) | 1e-4 after warmup |
+| `vs-heuristic` | Heuristic | 30M | Same | Same |
+| `lr-decay` | Whichever stage produced the best model | 30M | Same | Linear decay to 0 |
+
+- **Starting point:** each stage starts from the best model at the time it
+  begins.
+- **Warmup:** each stage first runs a 10-update critic-only warmup with its own
+  reward and opponent, because either change shifts what the critic should
+  predict.
+- **Baseline:** the 130M and 200M checkpoints each get 2,000 battles, and the
+  better one is the model to beat.
+- **Milestone tests:** every 5M states, a milestone gets 1,000 battles against
+  the corrected heuristic.
+- **Promotion:** a milestone that beats the current best gets 1,000 more battles
+  with a different sampling seed. It becomes the best only if the pooled
+  2,000-battle result is higher. That keeps a lucky 1,000-battle result from
+  being crowned.
+- **Best model:** copied to `checkpoints/best-experiments/best.pt`, with its
+  pooled results and the history of improvements in `best.json`.
+
+Run, watch and stop it:
+
+```powershell
+& $python -u experiments.py                      # start, or resume after a stop or crash
+Get-Content logs/experiments/status.json         # stage, phase, training progress, best so far
+Get-Content checkpoints/best-experiments/best.json
+New-Item -ItemType File logs/experiments/stop    # stop cleanly; training saves a checkpoint first
+```
+
+How it behaves:
+- **The plan can be edited mid-run.** It is in `logs/experiments/plan.json` and
+  is re-read before each stage, so later stages can be changed while it runs.
+- **Results are kept as it goes.** Every evaluation is recorded in
+  `logs/experiments/evaluations.json`, and logs are in `logs/experiments/`.
+- **A restart resumes.** Finished stages and evaluations are not repeated, and
+  a crashed training run is retried up to three times from its own checkpoints.
+- **Training files:** each stage's checkpoints are in
+  `checkpoints/experiments/<stage>/`.
+
+Self-play runs at about 1,500 states/s, so the first stage takes about
+7.5 hours. Heuristic games yield half the training states per battle, so the
+later stages will be slower. The whole plan should take about 1.5 days.
+
+### Results
+
+The pipeline ran from Nov 27, 2026, 09:21 Central to Nov 28, 09:01, about 24
+hours. Each row is the best model after that stage, pooled over 2,000 battles
+against the corrected heuristic, with actions sampled from the policy.
+
+**Best against the heuristic: 94.4%** (93.3–95.3%), saved as
+`checkpoints/best-experiments/best.pt`. It is the `lr-decay` stage's 25M
+milestone: 200M states of self-play, then 25M of self-play with the new
+reward, then 35M against the heuristic (10M at a constant learning rate and
+25M with linear decay). `best.json` beside it records every promotion.
+
+**It is not a stronger player overall.** Head to head, it wins only 37.4% of
+2,000 battles against the 200M self-play model (see
+[Head-to-head check](#head-to-head-check)). Training against the heuristic
+taught it to exploit that opponent at the cost of general strength. Which
+model is best depends on the goal:
+
+| Goal | Model |
+| --- | --- |
+| Beat `SimpleHeuristicsPlayer` (this project's target) | `checkpoints/best-experiments/best.pt`, 94.4% |
+| Strongest general player | `checkpoints/ppo-readme/milestones/states-000200000000.pt`, 87.0% against the heuristic |
+
+| Model | Battles | Win rate | 95% interval | Notes |
+| --- | --- | --- | --- | --- |
+| Baseline: 200M self-play | 2,000 | 87.0% | 85.4–88.4% | 130M scored 84.9% |
+| `reward-selfplay`, 25M states | 2,000 | 87.5% | 85.9–88.8% | Stage finished 17:06 |
+| `vs-heuristic`, 10M states | 2,000 | 91.9% | 90.6–93.0% | Stage finished 23:50 |
+| `lr-decay`, 25M states | 2,000 | **94.4%** | 93.3–95.3% | Best against the heuristic; stage finished 09:01 |
+
+- **The new reward alone did not help.** Self-play with the faint fix and HP
+  shaping tied the baseline.
+- **Training against the heuristic raised its score** by 4.9 points, mostly
+  within its first 5–10M states, but made the model weaker against everything
+  else that was tested. See [Head-to-head check](#head-to-head-check).
+- **Learning-rate decay added 2.5 points** against the heuristic on top. As the
+  rate fell, updates also ran more passes per batch, so either change could be
+  responsible. It did not lose further ground head to head.
+
+#### Head-to-head check
+
+After the pipeline, each model played opponents it never trained against.
+Actions were sampled, as in every other test.
+
+| Matchup | Battles | First model's win rate | 95% interval |
+| --- | --- | --- | --- |
+| `lr-decay` 25M (best) vs 200M self-play | 2,000 | **37.4%** | 35.3–39.5% |
+| 200M self-play vs `lr-decay` 25M, sides swapped | 1,000 | 63.6% | 60.6–66.5% |
+| 200M self-play vs itself, as a fairness check | 1,000 | 48.9% | 45.8–52.0% |
+| `lr-decay` 25M vs `reward-selfplay` 25M | 2,000 | 37.9% | 35.8–40.0% |
+| `vs-heuristic` 5M vs 200M self-play | 1,000 | 40.5% | 37.5–43.6% |
+| `vs-heuristic` 10M vs 200M self-play | 1,000 | 35.4% | 32.5–38.4% |
+
+| Opponent | `lr-decay` 25M | 200M self-play |
+| --- | --- | --- |
+| Corrected heuristic (training opponent, from the pipeline) | 94.4% | 87.0% |
+| Stock heuristic (same player, original stat estimate) | 93.9% | 87.2% |
+| `MaxBasePowerPlayer` | 98.9% | 98.6% |
+
+- **The result is not a measurement artifact.** Swapping sides gives the same
+  answer, and a model against itself scores about 50%.
+- **The heuristic-trained models lose about 63–37 to self-play models,**
+  roughly 90 Elo. The loss appeared within the first 5M states against the
+  heuristic and stayed between 35% and 41% after that.
+- **The gain carries over only to the same heuristic.** The stock variant
+  differs only in its stat estimate. `MaxBasePowerPlayer` is too weak to
+  separate the two models.
+- **Next step, if general strength matters:** train against a mix of the
+  heuristic and self-play opponents, so the policy cannot specialize. The
+  current code supports one or the other per run.
+
+Reproduce one matchup:
+
+```powershell
+& $python run_local.py --server-dir $server --port 8010 --skip-build --entry evaluate --checkpoint checkpoints/best-experiments/best.pt --opponent-checkpoint checkpoints/ppo-readme/milestones/states-000200000000.pt --battles 2000 --concurrency 16 --device cuda --seed 81 --output logs/caveat/best-vs-200m.json
+```
+
+Results and logs are in `logs/caveat/`.
+
+#### Stage 1: `reward-selfplay` (finished)
+
+Self-play from the 200M model with the fixed faint reward and HP shaping
+(c = 0.5), 40M states, 09:31 to 17:06.
+
+Every milestone gets 1,000 battles at seed 71; a second 1,000 at seed 72 only
+when the first beats the best.
+
+| Milestone | Seed 71 | Seed 72 | Pooled | 95% interval |
+| --- | --- | --- | --- | --- |
+| 5M | 86.0% | | 86.0% | 83.7–88.0% |
+| 10M | 87.1% | 87.1% | 87.1% | 85.6–88.5% |
+| 15M | 86.4% | | 86.4% | 84.1–88.4% |
+| 20M | 86.1% | | 86.1% | 83.8–88.1% |
+| 25M | 87.3% | 87.6% | 87.5% | 85.9–88.8% |
+| 30M | 86.7% | | 86.7% | 84.5–88.7% |
+| 35M | 86.9% | | 86.9% | 84.7–88.9% |
+| 40M | 85.4% | | 85.4% | 83.1–87.5% |
+
+- **Result: a tie with the baseline.** Every milestone stayed between 85.4%
+  and 87.5%. The 10M and then the 25M milestone were promoted because their
+  pooled results were higher, but 25M is only 0.5 points above the baseline,
+  about half a standard error. This is no evidence that the new reward helps or
+  hurts.
+- **Why HP shaping does little here:** once the critic has learned the shaped
+  values V − Φ, each step's TD error equals the unshaped one,
+  r + γΦ′ − Φ + γ(V′ − Φ′) − (V − Φ) = r + γV′ − V. GAE sums TD errors, so the
+  policy gradient is unchanged. Shaping helps only while the critic is
+  inaccurate, which is mostly early in training. The critic warmup fitted it
+  before PPO began.
+- **Why the faint fix does little here:** apart from timing, which the critic
+  absorbs the same way, its only lasting effect is a small margin bonus. A win
+  is worth 1 + 0.1 × (our Pokemon left), a loss −1 − 0.1 × (theirs left).
+- **Training:** the critic warmup lowered critic loss from 3.38 to about 2.6
+  over 10 updates. The first 40 or so PPO updates ran at about 840 states/s,
+  because during the fresh learning-rate warmup KL stayed below the early-stop
+  threshold and every update ran all 3 passes. From 5M states on it ran at
+  about 1,460 states/s, with updates stopping after 9 optimizer steps.
+  Entropy fell from 0.52 to about 0.44.
+
+#### Stage 2: `vs-heuristic` (finished)
+
+PPO against the corrected heuristic, starting from the stage 1 25M model, with
+the same reward, 30M states, 17:07 to 23:50. Only the agent's side of each
+battle is trained on.
+
+| Milestone | Seed 71 | Seed 72 | Pooled | 95% interval |
+| --- | --- | --- | --- | --- |
+| 5M | 91.0% | 90.6% | 90.8% | 89.5–92.0% |
+| 10M | 92.3% | 91.4% | 91.9% | 90.6–93.0% |
+| 15M | 89.5% | | 89.5% | 87.4–91.3% |
+| 20M | 91.1% | | 91.1% | 89.2–92.7% |
+| 25M | 91.5% | | 91.5% | 89.6–93.1% |
+| 30M | 91.5% | | 91.5% | 89.6–93.1% |
+
+- **The first clear gain:** the best milestone, 10M, won 91.9%, 4.9 points
+  above the 200M baseline (about 5 standard errors). The gain came in the first
+  5–10M states; from 10M on, results stayed at about 89.5–92%.
+- **The gain is specific to the heuristic.** This stage trains against the
+  same opponent the test uses. Head to head, its 10M milestone wins only 35.4%
+  against the 200M self-play model. See
+  [Head-to-head check](#head-to-head-check).
+- **Training:** about 1,270 states/s, lower than self-play because only one
+  side of each battle produces training data. The agent won 91.0% of its
+  998,748 training battles. Critic loss fell from about 1.74 to 1.58, lower
+  than in self-play because results against a fixed opponent are easier to
+  predict. Entropy rose from about 0.44 to 0.59.
+
+#### Stage 3: `lr-decay` (finished)
+
+PPO against the corrected heuristic (`auto` mode followed the best model's
+mode), starting from the stage 2 10M model, with the same reward. The learning
+rate warms up over 100 optimizer steps, then decays linearly to zero at 30M
+states. 23:50 on Nov 27 to 09:01 on Nov 28.
+
+| Milestone | Seed 71 | Seed 72 | Pooled | 95% interval |
+| --- | --- | --- | --- | --- |
+| 5M | 90.3% | | 90.3% | 88.3–92.0% |
+| 10M | 93.0% | 92.1% | 92.5% | 91.3–93.6% |
+| 15M | 93.2% | 91.5% | 92.3% | 91.1–93.4% |
+| 20M | 92.5% | | 92.5% | 90.7–94.0% |
+| 25M | 93.8% | 95.0% | 94.4% | 93.3–95.3% |
+| 30M | 93.8% | | 93.8% | 92.1–95.1% |
+
+- **Best:** 25M won 94.4%, 7.4 points above the 200M baseline and 2.5
+  points above the stage 2 best (91.9%, about 3 standard errors). Its seed 72
+  test, which played no part in selecting it, scored 95.0% on its own, so the
+  result is not inflated by picking the luckiest milestone.
+- **Two things changed as the rate decayed:** the steps got smaller, and from
+  about 15M states KL stayed below the early-stop threshold, so updates went
+  from 9 optimizer steps to all 24 (3 passes over each batch). The gain could
+  come from either. The extra passes also cut throughput from about 1,270 to
+  about 820 states/s.
+- **Training:** the agent won 92.5% of its 995,261 training battles. Entropy
+  stayed at about 0.6–0.7, higher than the 0.44 of late self-play. Critic loss
+  fell from about 1.6 to 1.38. The final 30M milestone, trained as the rate
+  reached zero, scored 93.8%, level with 25M within noise.
 
 ## What changed
 
@@ -285,6 +597,8 @@ Compared with the upstream repository and with earlier local attempts:
   2 layers, 8 heads, about 58M parameters. The actor and critic cannot attend to
   each other, and state tokens cannot attend to them. There is no recurrence.
 - **Move categories:** restored as described in Step 2.
+- **Faint reward, HP shaping, heuristic opponent and linear learning-rate
+  decay:** see [Experiments after 200M](#experiments-after-200m).
 - **README-era PPO defaults:** see Step 4.
   - Earlier local runs used 64-state minibatches, a per-minibatch KL stop and
     0.5/1/2 rates for backbone/policy/value. That meant about 1,500 small
@@ -328,22 +642,29 @@ Compared with the upstream repository and with earlier local attempts:
 | `imitation.py`, `metrics.py` | Offline imitation, action-agreement metrics, resumable checkpoints |
 | `upgrade_checkpoint.py` | Output-preserving conversion to move-category inputs |
 | `inference.py` | Batched policy inference and weight synchronization |
-| `worker.py` | Live battles, corrected heuristic, rewards, trajectories, finished-room filter |
-| `learner.py` | PPO and critic learning, resume guard, milestones |
-| `train.py` | Ray orchestration, server port assignment, status file, stop file |
-| `evaluate.py` | Fixed-checkpoint evaluation against the corrected or stock heuristic |
+| `worker.py` | Live battles, corrected heuristic, trajectories, finished-room filter |
+| `rewards.py` | Terminal and faint rewards, potential-based HP-lead shaping |
+| `learner.py` | PPO and critic learning, resume guard, milestones, linear schedule progress |
+| `train.py` | Ray orchestration, server port assignment, reward/opponent/schedule options, status and stop files |
+| `experiments.py` | Unattended staged experiments with automatic evaluation and best-model tracking |
+| `evaluate.py` | Fixed-checkpoint evaluation against the corrected or stock heuristic, `MaxBasePowerPlayer`, `RandomPlayer` or another checkpoint |
 | `checkpoint_io.py` | Strict architecture loading, atomic writes, legacy defaults |
-| `run_local.py` | Starts and stops its own Showdown servers around any entry point |
+| `run_local.py` | Starts and stops its own Showdown servers around any entry point (`--skip-build` reuses the built server) |
 | `Stop-LocalTraining.ps1` | Requests a clean stop |
 | `pokemon-showdown/server/chat-plugins/rlspawn.ts` | Showdown plugin for continuous rollout battles |
 | `vendor/` | Historical `de8cc69` source with tested hashes |
 | `provenance.json` | Hashes of the sources copied from the parent project, and the adaptations made |
-| `tests/` | 42 unit tests and fixtures |
+| `tests/` | 55 unit tests and fixtures |
 
 **Checkpoints:**
 - `checkpoints/seed/` holds the 50k imitation seed and its upgraded copy.
 - `checkpoints/warmup-category/` holds the warmup result.
 - `checkpoints/ppo-readme/` holds the PPO run.
+- `checkpoints/best/ppo-readme-130m.pt` is the self-play run's best 500-battle
+  result.
+- `checkpoints/experiments/` holds the experiment stages, and
+  `checkpoints/best-experiments/` holds their best model against the heuristic.
+  The 200M self-play model is stronger head to head.
 - `checkpoints/seed/imitation-best.pt` is an older 10k-battle imitation seed:
   69.0% held-out agreement and 15.0% against the heuristic. It is still the
   default for `train.py` and `evaluate.py` when no checkpoint is given, so
@@ -356,13 +677,17 @@ Compared with the upstream repository and with earlier local attempts:
 & $python run_local.py --server-dir $server --device cpu --mode ppo --model-config tests/tiny_model.json --no-resume --steps-per-update 64 --batch-size 16 --microbatch-size 8 --epochs 1 --max-updates 2 --checkpoint-dir checkpoints/smoke --save-every 1
 ```
 
-The 42 tests cover:
+The 55 tests cover:
 - checkpoint parity and token isolation;
 - move-category upgrades;
 - README-era defaults and the resume guard;
 - minibatch remainders and milestones;
 - the stock heuristic;
-- the finished-room filter, including a reproduction of poke-env's hang.
+- the finished-room filter, including a reproduction of poke-env's hang;
+- the faint-index fix and legacy reward;
+- HP shaping;
+- the heuristic opponent and the linear schedule;
+- the experiment plan and best-model promotion.
 
 The second command is a two-update CPU smoke run. `tests/tiny_model.json` keeps
 the 15-token layout with smaller widths.

@@ -3,7 +3,14 @@ import torch
 from config import PPO_LR_MULTIPLIERS
 
 
-def make_optimizer(model, cfg):
+def make_optimizer(model, cfg, progress=None):
+    """AdamW with the configured schedule.
+
+    progress() returns the fraction of the state target reached; the "linear"
+    schedule reads it at every optimizer step, so the rate follows new states
+    (which are saved and restored) rather than optimizer steps, whose count per
+    update varies with KL early stopping.
+    """
     zones = model.get_parameter_zones()
     groups = []
     ppo_multipliers = PPO_LR_MULTIPLIERS[cfg.ppo_lr_multipliers]
@@ -26,12 +33,16 @@ def make_optimizer(model, cfg):
     def scale(step):
         if cfg.lr_schedule == "constant":
             return 1.
+        if cfg.lr_schedule == "linear":
+            warmup = min(1., (step+1)/max(1, cfg.lr_warmup_steps))
+            done = min(1., max(0., progress() if progress else 0.))
+            return warmup * (1. - (1.-cfg.lr_final_fraction)*done)
         if step < cfg.lr_warmup_steps:
             return (step+1)/max(1, cfg.lr_warmup_steps)
         if step < cfg.lr_warmup_steps + cfg.lr_hold_steps:
             return 1.
-        progress = min(1., (step-cfg.lr_warmup_steps-cfg.lr_hold_steps)
+        decayed = min(1., (step-cfg.lr_warmup_steps-cfg.lr_hold_steps)
             / max(1, cfg.lr_total_steps-cfg.lr_warmup_steps-cfg.lr_hold_steps))
-        return 1./(8*progress+1)**1.5
+        return 1./(8*decayed+1)**1.5
 
     return optimizer, torch.optim.lr_scheduler.LambdaLR(optimizer, scale)

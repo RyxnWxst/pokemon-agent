@@ -25,7 +25,7 @@ class LearnerActor:
         np.random.seed(71)
         random.seed(71)
         self.net = cfg.make_model().to(self.cfg.device)
-        self.opt, self.sched = make_optimizer(self.net, self.cfg)
+        self.opt, self.sched = make_optimizer(self.net, self.cfg, progress=self.state_progress)
         self.dataset = AsyncEpisodeDataset(cfg.env.act_dim, "cpu")
         self.update_idx = self.total_steps = self.total_episodes = 0
         self.last_update = None
@@ -48,6 +48,11 @@ class LearnerActor:
         self._startup_task = loop.create_task(self._publish())
         self._task = loop.create_task(self._loop())
         self._task.add_done_callback(self._on_loop_done)
+
+    def state_progress(self):
+        """Fraction of this phase's state target reached (drives the linear schedule)."""
+        target = self.cfg.max_total_steps
+        return min(1., getattr(self, "total_steps", 0) / target) if target else 0.
 
     async def _publish(self):
         weights = {key: value.detach().cpu() for key, value in self.net.state_dict().items()}
