@@ -302,6 +302,10 @@ Evaluation is run by hand on milestones, during or after training:
 - The opponent defaults to the corrected heuristic. `--opponent stock` restores
   poke-env 0.15's original stat estimate, which predates the April 2026
   correction and the upstream README's result.
+- `--opponent max_power` and `--opponent random` play poke-env's
+  `MaxBasePowerPlayer` and `RandomPlayer`.
+- `--opponent-checkpoint <path>` plays another checkpoint instead, with the same
+  action selection. The report counts wins for `--checkpoint`.
 - `--greedy` always picks the policy's top action instead of sampling. Keep one
   protocol when comparing checkpoints.
 - Results include wins, losses, ties and a 95% Wilson interval.
@@ -413,26 +417,78 @@ The pipeline ran from Nov 27, 2026, 09:21 Central to Nov 28, 09:01, about 24
 hours. Each row is the best model after that stage, pooled over 2,000 battles
 against the corrected heuristic, with actions sampled from the policy.
 
-**Final best: 94.4%** (93.3–95.3%), saved as
+**Best against the heuristic: 94.4%** (93.3–95.3%), saved as
 `checkpoints/best-experiments/best.pt`. It is the `lr-decay` stage's 25M
 milestone: 200M states of self-play, then 25M of self-play with the new
-reward, then 40M against the heuristic (10M at a constant learning rate and
+reward, then 35M against the heuristic (10M at a constant learning rate and
 25M with linear decay). `best.json` beside it records every promotion.
+
+**It is not a stronger player overall.** Head to head, it wins only 37.4% of
+2,000 battles against the 200M self-play model (see
+[Head-to-head check](#head-to-head-check)). Training against the heuristic
+taught it to exploit that opponent at the cost of general strength. Which
+model is best depends on the goal:
+
+| Goal | Model |
+| --- | --- |
+| Beat `SimpleHeuristicsPlayer` (this project's target) | `checkpoints/best-experiments/best.pt`, 94.4% |
+| Strongest general player | `checkpoints/ppo-readme/milestones/states-000200000000.pt`, 87.0% against the heuristic |
 
 | Model | Battles | Win rate | 95% interval | Notes |
 | --- | --- | --- | --- | --- |
 | Baseline: 200M self-play | 2,000 | 87.0% | 85.4–88.4% | 130M scored 84.9% |
 | `reward-selfplay`, 25M states | 2,000 | 87.5% | 85.9–88.8% | Stage finished 17:06 |
 | `vs-heuristic`, 10M states | 2,000 | 91.9% | 90.6–93.0% | Stage finished 23:50 |
-| `lr-decay`, 25M states | 2,000 | **94.4%** | 93.3–95.3% | Final best; stage finished 09:01 |
+| `lr-decay`, 25M states | 2,000 | **94.4%** | 93.3–95.3% | Best against the heuristic; stage finished 09:01 |
 
 - **The new reward alone did not help.** Self-play with the faint fix and HP
   shaping tied the baseline.
-- **Training against the heuristic helped** (+4.9 points), mostly within its
-  first 5–10M states. It targets the same opponent the test uses, so part of
-  the gain may be specific to that opponent.
-- **Learning-rate decay added 2.5 points** on top. As the rate fell, updates
-  also ran more passes per batch, so either change could be responsible.
+- **Training against the heuristic raised its score** by 4.9 points, mostly
+  within its first 5–10M states, but made the model weaker against everything
+  else that was tested. See [Head-to-head check](#head-to-head-check).
+- **Learning-rate decay added 2.5 points** against the heuristic on top. As the
+  rate fell, updates also ran more passes per batch, so either change could be
+  responsible. It did not lose further ground head to head.
+
+#### Head-to-head check
+
+After the pipeline, each model played opponents it never trained against.
+Actions were sampled, as in every other test.
+
+| Matchup | Battles | First model's win rate | 95% interval |
+| --- | --- | --- | --- |
+| `lr-decay` 25M (best) vs 200M self-play | 2,000 | **37.4%** | 35.3–39.5% |
+| 200M self-play vs `lr-decay` 25M, sides swapped | 1,000 | 63.6% | 60.6–66.5% |
+| 200M self-play vs itself, as a fairness check | 1,000 | 48.9% | 45.8–52.0% |
+| `lr-decay` 25M vs `reward-selfplay` 25M | 2,000 | 37.9% | 35.8–40.0% |
+| `vs-heuristic` 5M vs 200M self-play | 1,000 | 40.5% | 37.5–43.6% |
+| `vs-heuristic` 10M vs 200M self-play | 1,000 | 35.4% | 32.5–38.4% |
+
+| Opponent | `lr-decay` 25M | 200M self-play |
+| --- | --- | --- |
+| Corrected heuristic (training opponent, from the pipeline) | 94.4% | 87.0% |
+| Stock heuristic (same player, original stat estimate) | 93.9% | 87.2% |
+| `MaxBasePowerPlayer` | 98.9% | 98.6% |
+
+- **The result is not a measurement artifact.** Swapping sides gives the same
+  answer, and a model against itself scores about 50%.
+- **The heuristic-trained models lose about 63–37 to self-play models,**
+  roughly 90 Elo. The loss appeared within the first 5M states against the
+  heuristic and stayed between 35% and 41% after that.
+- **The gain carries over only to the same heuristic.** The stock variant
+  differs only in its stat estimate. `MaxBasePowerPlayer` is too weak to
+  separate the two models.
+- **Next step, if general strength matters:** train against a mix of the
+  heuristic and self-play opponents, so the policy cannot specialize. The
+  current code supports one or the other per run.
+
+Reproduce one matchup:
+
+```powershell
+& $python run_local.py --server-dir $server --port 8010 --skip-build --entry evaluate --checkpoint checkpoints/best-experiments/best.pt --opponent-checkpoint checkpoints/ppo-readme/milestones/states-000200000000.pt --battles 2000 --concurrency 16 --device cuda --seed 81 --output logs/caveat/best-vs-200m.json
+```
+
+Results and logs are in `logs/caveat/`.
 
 #### Stage 1: `reward-selfplay` (finished)
 
@@ -492,10 +548,10 @@ battle is trained on.
 - **The first clear gain:** the best milestone, 10M, won 91.9%, 4.9 points
   above the 200M baseline (about 5 standard errors). The gain came in the first
   5–10M states; from 10M on, results stayed at about 89.5–92%.
-- **Caveat:** this stage trains against the same opponent the test uses. The
-  test battles are new games with different random teams, but the policy may
-  be learning that heuristic's specific weaknesses. Its gain against other
-  opponents could be smaller.
+- **The gain is specific to the heuristic.** This stage trains against the
+  same opponent the test uses. Head to head, its 10M milestone wins only 35.4%
+  against the 200M self-play model. See
+  [Head-to-head check](#head-to-head-check).
 - **Training:** about 1,270 states/s, lower than self-play because only one
   side of each battle produces training data. The agent won 91.0% of its
   998,748 training battles. Critic loss fell from about 1.74 to 1.58, lower
@@ -591,7 +647,7 @@ Compared with the upstream repository and with earlier local attempts:
 | `learner.py` | PPO and critic learning, resume guard, milestones, linear schedule progress |
 | `train.py` | Ray orchestration, server port assignment, reward/opponent/schedule options, status and stop files |
 | `experiments.py` | Unattended staged experiments with automatic evaluation and best-model tracking |
-| `evaluate.py` | Fixed-checkpoint evaluation against the corrected or stock heuristic |
+| `evaluate.py` | Fixed-checkpoint evaluation against the corrected or stock heuristic, `MaxBasePowerPlayer`, `RandomPlayer` or another checkpoint |
 | `checkpoint_io.py` | Strict architecture loading, atomic writes, legacy defaults |
 | `run_local.py` | Starts and stops its own Showdown servers around any entry point (`--skip-build` reuses the built server) |
 | `Stop-LocalTraining.ps1` | Requests a clean stop |
@@ -607,7 +663,8 @@ Compared with the upstream repository and with earlier local attempts:
 - `checkpoints/best/ppo-readme-130m.pt` is the self-play run's best 500-battle
   result.
 - `checkpoints/experiments/` holds the experiment stages, and
-  `checkpoints/best-experiments/` holds their best model.
+  `checkpoints/best-experiments/` holds their best model against the heuristic.
+  The 200M self-play model is stronger head to head.
 - `checkpoints/seed/imitation-best.pt` is an older 10k-battle imitation seed:
   69.0% held-out agreement and 15.0% against the heuristic. It is still the
   default for `train.py` and `evaluate.py` when no checkpoint is given, so

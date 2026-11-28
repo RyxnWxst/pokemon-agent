@@ -1,4 +1,4 @@
-"""Play a fixed 15-token checkpoint against the heuristic (corrected or stock); no training."""
+"""Play a fixed 15-token checkpoint against a heuristic, a simple baseline player, or another checkpoint; no training."""
 import argparse
 import asyncio
 import json
@@ -9,7 +9,8 @@ import time
 import numpy as np
 import torch
 from poke_env import AccountConfiguration, ServerConfiguration
-from poke_env.player import Player, SimpleHeuristicsPlayer, DefaultBattleOrder
+from poke_env.player import (DefaultBattleOrder, MaxBasePowerPlayer, Player, RandomPlayer,
+    SimpleHeuristicsPlayer)
 from checkpoint_io import atomic_json, load_weights, model_config, read_checkpoint
 from config import ROOT
 from model import make_model
@@ -46,7 +47,18 @@ class StockHeuristicsPlayer(SimpleHeuristicsPlayer):
             SimpleHeuristicsPlayer._stat_estimation = corrected
 
 
-OPPONENTS = {"corrected": SimpleHeuristicsPlayer, "stock": StockHeuristicsPlayer}
+OPPONENTS = {"corrected": SimpleHeuristicsPlayer, "stock": StockHeuristicsPlayer,
+             "max_power": MaxBasePowerPlayer, "random": RandomPlayer}
+OPPONENT_NAMES = {"corrected": "corrected SimpleHeuristicsPlayer", "stock": "stock SimpleHeuristicsPlayer",
+                  "max_power": "MaxBasePowerPlayer", "random": "RandomPlayer"}
+
+
+def load_model(path, device):
+    checkpoint = read_checkpoint(path)
+    model = make_model(model_config(checkpoint)).to(device).eval()
+    load_weights(model, checkpoint)
+    model.requires_grad_(False)
+    return model
 
 
 class SavedModelPlayer(Player):
@@ -101,7 +113,10 @@ async def main():
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--greedy", action="store_true", help="Default is sampled actions, matching the recorded baseline")
     parser.add_argument("--opponent", choices=tuple(OPPONENTS), default="corrected",
-        help="corrected: Gen 9 level-aware stat estimate used for collection; stock: poke-env's original")
+        help="corrected: Gen 9 level-aware stat estimate used for collection; stock: poke-env's original; "
+             "max_power: always the highest base-power move; random: uniformly random legal actions")
+    parser.add_argument("--opponent-checkpoint", default=None,
+        help="Play against this checkpoint instead of --opponent; it uses the same action selection")
     parser.add_argument("--seed", type=int, default=71)
     parser.add_argument("--output", default=str(ROOT/"logs/evaluation.json"))
     args = parser.parse_args()
@@ -111,17 +126,15 @@ async def main():
     torch.manual_seed(args.seed)
     random.seed(args.seed)
     np.random.seed(args.seed)
-    checkpoint = read_checkpoint(args.checkpoint)
-    model = make_model(model_config(checkpoint)).to(args.device).eval()
-    load_weights(model, checkpoint)
-    model.requires_grad_(False)
-    del checkpoint
+    model = load_model(args.checkpoint, args.device)
+    opponent_name = (f"checkpoint {args.opponent_checkpoint}" if args.opponent_checkpoint
+                     else OPPONENT_NAMES[args.opponent])
     configuration = ServerConfiguration(f"ws://127.0.0.1:{args.port}/showdown/websocket",
         f"http://127.0.0.1:{args.port}/action.php?")
     common = dict(server_configuration=configuration, battle_format="gen9randombattle",
         max_concurrent_battles=args.concurrency, log_level=40)
     report = dict(status="running", checkpoint=args.checkpoint, target_battles=args.battles,
-        action_selection="greedy" if args.greedy else "sampled", opponent=f"{args.opponent} SimpleHeuristicsPlayer",
+        action_selection="greedy" if args.greedy else "sampled", opponent=opponent_name,
         policy_seed=args.seed, teams="fresh simulator-generated random teams", training=False)
     started = time.monotonic()
 
@@ -140,8 +153,12 @@ async def main():
     run_id = secrets.token_hex(4)
     bot = SavedModelPlayer(model, args.device, greedy=args.greedy, progress=progress,
         account_configuration=AccountConfiguration(f"eval{run_id}a", None), **common)
-    opponent = OPPONENTS[args.opponent](
-        account_configuration=AccountConfiguration(f"eval{run_id}b", None), **common)
+    opponent_account = AccountConfiguration(f"eval{run_id}b", None)
+    if args.opponent_checkpoint:
+        opponent = SavedModelPlayer(load_model(args.opponent_checkpoint, args.device), args.device,
+            greedy=args.greedy, account_configuration=opponent_account, **common)
+    else:
+        opponent = OPPONENTS[args.opponent](account_configuration=opponent_account, **common)
     try:
         await asyncio.wait_for(bot.battle_against(opponent, n_battles=args.battles), timeout=max(600, args.battles*30))
         if bot.n_finished_battles != args.battles:

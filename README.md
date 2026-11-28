@@ -43,9 +43,13 @@ model, over 2,000 battles:
 | + learning-rate decay, still against the heuristic | **94.4%** | 93.3–95.3% |
 
 The new reward alone tied the baseline. Training against the heuristic and
-then decaying the learning rate produced the gain. Those stages train against
-the same opponent the test uses, so part of the gain may be specific to that
-opponent. Details are in
+then decaying the learning rate produced the gain against the heuristic.
+
+**That gain is specific to the heuristic.** Head to head, the 94.4% model wins
+only 37.4% of 2,000 battles against the 200M self-play model. It learned to
+exploit the heuristic at the cost of general strength. So the 94.4% model is
+the best for this project's target, beating `SimpleHeuristicsPlayer`, while
+the 200M self-play model is the stronger general player. Details are in
 [Experiments after 200M](ps-ppo-15token/README.md#experiments-after-200m).
 
 Trained checkpoints are not stored in this repository; each is about 233 MB.
