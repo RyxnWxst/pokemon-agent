@@ -407,17 +407,32 @@ Self-play runs at about 1,500 states/s, so the first stage takes about
 7.5 hours. Heuristic games yield half the training states per battle, so the
 later stages will be slower. The whole plan should take about 1.5 days.
 
-### Results so far
+### Results
 
-The pipeline started on Nov 27, 2026, at 09:21 Central. Each row is a pooled
-test against the corrected heuristic, with actions sampled from the policy.
+The pipeline ran from Nov 27, 2026, 09:21 Central to Nov 28, 09:01, about 24
+hours. Each row is the best model after that stage, pooled over 2,000 battles
+against the corrected heuristic, with actions sampled from the policy.
+
+**Final best: 94.4%** (93.3–95.3%), saved as
+`checkpoints/best-experiments/best.pt`. It is the `lr-decay` stage's 25M
+milestone: 200M states of self-play, then 25M of self-play with the new
+reward, then 40M against the heuristic (10M at a constant learning rate and
+25M with linear decay). `best.json` beside it records every promotion.
 
 | Model | Battles | Win rate | 95% interval | Notes |
 | --- | --- | --- | --- | --- |
 | Baseline: 200M self-play | 2,000 | 87.0% | 85.4–88.4% | 130M scored 84.9% |
 | `reward-selfplay`, 25M states | 2,000 | 87.5% | 85.9–88.8% | Stage finished 17:06 |
-| `vs-heuristic`, 10M states | 2,000 | 91.9% | 90.6–93.0% | Current best; stage finished 23:50 |
-| `lr-decay` | | | | Started 23:50 from the 10M model, against the heuristic |
+| `vs-heuristic`, 10M states | 2,000 | 91.9% | 90.6–93.0% | Stage finished 23:50 |
+| `lr-decay`, 25M states | 2,000 | **94.4%** | 93.3–95.3% | Final best; stage finished 09:01 |
+
+- **The new reward alone did not help.** Self-play with the faint fix and HP
+  shaping tied the baseline.
+- **Training against the heuristic helped** (+4.9 points), mostly within its
+  first 5–10M states. It targets the same opponent the test uses, so part of
+  the gain may be specific to that opponent.
+- **Learning-rate decay added 2.5 points** on top. As the rate fell, updates
+  also ran more passes per batch, so either change could be responsible.
 
 #### Stage 1: `reward-selfplay` (finished)
 
@@ -486,6 +501,36 @@ battle is trained on.
   998,748 training battles. Critic loss fell from about 1.74 to 1.58, lower
   than in self-play because results against a fixed opponent are easier to
   predict. Entropy rose from about 0.44 to 0.59.
+
+#### Stage 3: `lr-decay` (finished)
+
+PPO against the corrected heuristic (`auto` mode followed the best model's
+mode), starting from the stage 2 10M model, with the same reward. The learning
+rate warms up over 100 optimizer steps, then decays linearly to zero at 30M
+states. 23:50 on Nov 27 to 09:01 on Nov 28.
+
+| Milestone | Seed 71 | Seed 72 | Pooled | 95% interval |
+| --- | --- | --- | --- | --- |
+| 5M | 90.3% | | 90.3% | 88.3–92.0% |
+| 10M | 93.0% | 92.1% | 92.5% | 91.3–93.6% |
+| 15M | 93.2% | 91.5% | 92.3% | 91.1–93.4% |
+| 20M | 92.5% | | 92.5% | 90.7–94.0% |
+| 25M | 93.8% | 95.0% | 94.4% | 93.3–95.3% |
+| 30M | 93.8% | | 93.8% | 92.1–95.1% |
+
+- **Best:** 25M won 94.4%, 7.4 points above the 200M baseline and 2.5
+  points above the stage 2 best (91.9%, about 3 standard errors). Its seed 72
+  test, which played no part in selecting it, scored 95.0% on its own, so the
+  result is not inflated by picking the luckiest milestone.
+- **Two things changed as the rate decayed:** the steps got smaller, and from
+  about 15M states KL stayed below the early-stop threshold, so updates went
+  from 9 optimizer steps to all 24 (3 passes over each batch). The gain could
+  come from either. The extra passes also cut throughput from about 1,270 to
+  about 820 states/s.
+- **Training:** the agent won 92.5% of its 995,261 training battles. Entropy
+  stayed at about 0.6–0.7, higher than the 0.44 of late self-play. Critic loss
+  fell from about 1.6 to 1.38. The final 30M milestone, trained as the rate
+  reached zero, scored 93.8%, level with 25M within noise.
 
 ## What changed
 
