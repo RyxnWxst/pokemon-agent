@@ -415,9 +415,9 @@ test against the corrected heuristic, with actions sampled from the policy.
 | Model | Battles | Win rate | 95% interval | Notes |
 | --- | --- | --- | --- | --- |
 | Baseline: 200M self-play | 2,000 | 87.0% | 85.4–88.4% | 130M scored 84.9% |
-| `reward-selfplay`, 25M states | 2,000 | 87.5% | 85.9–88.8% | Current best; stage finished 17:06 |
-| `vs-heuristic` | | | | Started 17:07 from the 25M model |
-| `lr-decay` | | | | Not started |
+| `reward-selfplay`, 25M states | 2,000 | 87.5% | 85.9–88.8% | Stage finished 17:06 |
+| `vs-heuristic`, 10M states | 2,000 | 91.9% | 90.6–93.0% | Current best; stage finished 23:50 |
+| `lr-decay` | | | | Started 23:50 from the 10M model, against the heuristic |
 
 #### Stage 1: `reward-selfplay` (finished)
 
@@ -458,6 +458,34 @@ when the first beats the best.
   threshold and every update ran all 3 passes. From 5M states on it ran at
   about 1,460 states/s, with updates stopping after 9 optimizer steps.
   Entropy fell from 0.52 to about 0.44.
+
+#### Stage 2: `vs-heuristic` (finished)
+
+PPO against the corrected heuristic, starting from the stage 1 25M model, with
+the same reward, 30M states, 17:07 to 23:50. Only the agent's side of each
+battle is trained on.
+
+| Milestone | Seed 71 | Seed 72 | Pooled | 95% interval |
+| --- | --- | --- | --- | --- |
+| 5M | 91.0% | 90.6% | 90.8% | 89.5–92.0% |
+| 10M | 92.3% | 91.4% | 91.9% | 90.6–93.0% |
+| 15M | 89.5% | | 89.5% | 87.4–91.3% |
+| 20M | 91.1% | | 91.1% | 89.2–92.7% |
+| 25M | 91.5% | | 91.5% | 89.6–93.1% |
+| 30M | 91.5% | | 91.5% | 89.6–93.1% |
+
+- **The first clear gain:** the best milestone, 10M, won 91.9%, 4.9 points
+  above the 200M baseline (about 5 standard errors). The gain came in the first
+  5–10M states; from 10M on, results stayed at about 89.5–92%.
+- **Caveat:** this stage trains against the same opponent the test uses. The
+  test battles are new games with different random teams, but the policy may
+  be learning that heuristic's specific weaknesses. Its gain against other
+  opponents could be smaller.
+- **Training:** about 1,270 states/s, lower than self-play because only one
+  side of each battle produces training data. The agent won 91.0% of its
+  998,748 training battles. Critic loss fell from about 1.74 to 1.58, lower
+  than in self-play because results against a fixed opponent are easier to
+  predict. Entropy rose from about 0.44 to 0.59.
 
 ## What changed
 
